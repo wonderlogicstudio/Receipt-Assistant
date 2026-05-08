@@ -10,8 +10,9 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
 
-from app.ocr.base import OCRResult
-from app.parser.receipt_parser import ReceiptRecord
+from app.core.enums import ReviewStatus
+from app.core.ocr_models import OCRResult
+from app.core.receipt_models import ReceiptRecord
 
 
 class ExcelExporter:
@@ -108,7 +109,7 @@ class ExcelExporter:
         sheet = workbook.create_sheet(self.review_sheet_name)
         sheet.append(self.summary_headers)
         for receipt in receipts:
-            if receipt.review_status == "검토필요" or receipt.review_reason:
+            if receipt.review_status == ReviewStatus.NEEDS_REVIEW.value or receipt.parser_warnings:
                 sheet.append([self._cell_value(getattr(receipt, header)) for header in self.summary_headers])
         self._format_sheet(sheet)
 
@@ -141,7 +142,7 @@ class ExcelExporter:
                         Path(receipt.source_file_name).name,
                         receipt.ocr_provider,
                         receipt.confidence,
-                        "success",
+                        "completed",
                         receipt.ocr_raw_text,
                     ]
                 )
@@ -173,4 +174,3 @@ class ExcelExporter:
         if isinstance(value, Path):
             return value.name
         return value
-
