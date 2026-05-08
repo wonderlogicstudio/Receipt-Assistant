@@ -92,7 +92,11 @@ class ReceiptValidator:
         return _unique(warnings)
 
     def _next_review_status(self, current_status: str, review_reasons: list[str]) -> str:
-        if current_status in {ReviewStatus.APPROVED.value, ReviewStatus.REJECTED.value}:
+        if current_status in {
+            ReviewStatus.APPROVED.value,
+            ReviewStatus.REJECTED.value,
+            ReviewStatus.EXCLUDED.value,
+        }:
             return current_status
         if current_status == ReviewStatus.NEEDS_REVIEW.value:
             return current_status

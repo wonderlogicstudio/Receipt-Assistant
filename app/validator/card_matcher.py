@@ -152,7 +152,11 @@ class CardMatcher:
     ) -> ReceiptRecord:
         review_reasons = _unique([*receipt.review_reasons, MERCHANT_MISMATCH_REASON])
         review_status = receipt.review_status
-        if review_status not in {ReviewStatus.APPROVED.value, ReviewStatus.REJECTED.value}:
+        if review_status not in {
+            ReviewStatus.APPROVED.value,
+            ReviewStatus.REJECTED.value,
+            ReviewStatus.EXCLUDED.value,
+        }:
             review_status = ReviewStatus.NEEDS_REVIEW.value
         return replace(
             receipt,

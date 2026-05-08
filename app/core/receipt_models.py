@@ -43,6 +43,8 @@ class ReceiptRecord:
     duplicate_candidate_ids: list[str] = field(default_factory=list)
     duplicate_reason: str | None = None
     approval_number: str | None = None
+    export_included: bool = True
+    user_note: str | None = None
     created_at: datetime = field(default_factory=datetime.utcnow)
     ocr_provider: str | None = None
 
@@ -67,6 +69,7 @@ class ReceiptRecord:
         review_status: ReviewStatus | str,
         review_reason: str,
         confidence: float | None,
+        card_match_status: CardMatchStatus | str = CardMatchStatus.UNMATCHED,
         parser_warnings: list[str] | None = None,
         review_reasons: list[str] | None = None,
         recommended_expense_category: str | None = None,
@@ -81,6 +84,8 @@ class ReceiptRecord:
         duplicate_candidate_ids: list[str] | None = None,
         duplicate_reason: str | None = None,
         approval_number: str | None = None,
+        export_included: bool = True,
+        user_note: str | None = None,
         ocr_provider: str | None = None,
     ) -> "ReceiptRecord":
         clean_review_reasons = _unique(parser_warnings or []) if review_reasons is None else _unique(review_reasons)
@@ -102,7 +107,7 @@ class ReceiptRecord:
             expense_category=expense_category,
             review_status=_enum_value(review_status),
             review_reason=review_reason,
-            card_match_status=CardMatchStatus.UNMATCHED.value,
+            card_match_status=_enum_value(card_match_status),
             confidence=confidence,
             parser_warnings=parser_warnings or [],
             review_reasons=clean_review_reasons,
@@ -118,6 +123,8 @@ class ReceiptRecord:
             duplicate_candidate_ids=_unique(duplicate_candidate_ids or []),
             duplicate_reason=duplicate_reason,
             approval_number=approval_number,
+            export_included=export_included,
+            user_note=user_note,
             ocr_provider=ocr_provider,
         )
 

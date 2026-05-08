@@ -37,6 +37,7 @@ class ReviewStatus(str, Enum):
     NEEDS_REVIEW = "needs_review"
     APPROVED = "approved"
     REJECTED = "rejected"
+    EXCLUDED = "excluded"
 
 
 class CardMatchStatus(str, Enum):

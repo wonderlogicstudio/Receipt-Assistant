@@ -45,7 +45,11 @@ class DuplicateChecker:
         validation_warnings = _unique(record.validation_warnings)
         candidate_ids = _unique([*record.duplicate_candidate_ids, candidate_id])
         review_status = record.review_status
-        if review_status not in {ReviewStatus.APPROVED.value, ReviewStatus.REJECTED.value}:
+        if review_status not in {
+            ReviewStatus.APPROVED.value,
+            ReviewStatus.REJECTED.value,
+            ReviewStatus.EXCLUDED.value,
+        }:
             review_status = ReviewStatus.NEEDS_REVIEW.value
         return replace(
             record,
