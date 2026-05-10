@@ -84,6 +84,19 @@
 
 ---
 
+## ADR-007: 구현 기준으로 문서 모델과 산출물 명세를 동기화한다
+
+| 항목 | 내용 |
+|---|---|
+| 날짜 | 2026-05-10 |
+| 결정 | README, PLAN, SPEC, CHECKLIST, AGENTS, CHANGE_CONTROL을 현재 구현 상태 기준으로 정리한다 |
+| 이유 | 파일럿 전 문서와 코드의 불일치를 줄여 테스트 진행자의 혼선을 줄이기 위해서 |
+| 영향 | `recommended_expense_category`와 `expense_category`의 역할을 구분하고, OCR 원문 전체와 raw JSON 전체는 엑셀 산출물에 쓰지 않는 원칙을 명확히 한다 |
+| 리스크 | 문서가 구현 상태에 맞춰지면서 향후 아이디어와 현재 기능이 분리되어 보일 수 있음 |
+| 대응 | 미완료 기능은 PLAN.md의 향후 항목으로 분리하고, 범위 변경은 CHANGE_CONTROL.md 절차를 따른다 |
+
+---
+
 ## ADR Template
 
 ```text

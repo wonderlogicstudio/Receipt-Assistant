@@ -55,8 +55,15 @@ Excel Exporter로 표준 엑셀 생성
 | confidence | float/null | N | OCR 신뢰도 |
 | parser_warnings | list[str] | Y | 파서 경고 목록 |
 | validation_warnings | list[str] | Y | 검증 경고 목록 |
+| validator_version | str/null | N | 검증 규칙 버전 |
 | matched_card_transaction_id | str/null | N | 매칭된 카드 사용내역 ID |
+| card_match_score | float/null | N | 카드 매칭 점수 |
+| card_match_reason | str/null | N | 카드 매칭 사유 |
+| card_match_candidate_count | int | Y | 카드 매칭 후보 건수 |
 | duplicate_group_id | str/null | N | 중복 의심 그룹 ID |
+| duplicate_candidate_ids | list[str] | Y | 중복 의심 후보 ID 목록 |
+| duplicate_reason | str/null | N | 중복 의심 사유 |
+| approval_number | str/null | N | 승인번호 |
 | export_included | bool | Y | 엑셀 정리내역 포함 여부 |
 | user_note | str/null | N | 사용자 메모 |
 | created_at | datetime | Y | 생성일시 |
@@ -104,6 +111,25 @@ Excel Exporter로 표준 엑셀 생성
 
 ---
 
+## 2.4 CardParseResult
+
+| 필드 | 타입 | 필수 | 설명 |
+|---|---|---:|---|
+| id | str | Y | 카드내역 파싱 결과 ID |
+| session_id | str/null | N | 처리 세션 ID |
+| source_file_id | str | Y | 원본 파일 ID |
+| source_file_name | str | Y | 카드내역 원본 파일명 |
+| total_rows | int | Y | 원본 전체 행 수 |
+| parsed_rows | int | Y | 파싱 성공 행 수 |
+| failed_rows | int | Y | 파싱 실패 행 수 |
+| transactions | list[CardTransaction] | Y | 파싱된 카드 사용내역 목록 |
+| missing_required_columns | list[str] | Y | 누락된 필수 컬럼 목록 |
+| warning_messages | list[str] | Y | 파싱 경고 목록 |
+| status | str | Y | completed, completed_with_warnings, failed |
+| created_at | datetime | Y | 생성일시 |
+
+---
+
 ## 3. Enum 정의
 
 ### EvidenceType
@@ -135,6 +161,34 @@ mismatch
 needs_review
 ```
 
+### CardParseStatus
+
+```text
+parsed
+needs_review
+failed
+```
+
+### CardParseResultStatus
+
+```text
+completed
+completed_with_warnings
+failed
+```
+
+## 3.1 검수 UI 표시값 매핑
+
+| 내부 상태 | UI 표시값 |
+|---|---|
+| approved | 확인완료 |
+| needs_review | 검토필요 |
+| pending | 검토필요 |
+| rejected | 제외 |
+| excluded | 제외 |
+
+검수 화면의 `포함` 값이 꺼져 있거나 검수상태가 `제외`이면 내부 상태는 `excluded`가 되고, 해당 건은 `01_정리내역`에서 제외되며 `08_제외내역`에 기록됩니다.
+
 ### RecommendedCategory
 
 초기 기본값:
@@ -150,6 +204,8 @@ needs_review
 기타
 미분류
 ```
+
+`recommended_expense_category`는 시스템이 제안한 참고용 비용항목입니다. `expense_category`는 사용자가 검수 화면에서 확인하거나 수정한 최종 입력값이며, 엑셀의 비용항목별 집계는 `expense_category` 기준입니다. `expense_category`가 비어 있으면 `미확정`으로 집계합니다.
 
 ---
 
