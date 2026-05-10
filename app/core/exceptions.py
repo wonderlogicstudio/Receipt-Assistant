@@ -2,6 +2,10 @@ class ReceiptAssistantError(Exception):
     """Base exception for expected application errors."""
 
 
+class ConfigurationError(ReceiptAssistantError):
+    """Raised when runtime configuration is incomplete or invalid."""
+
+
 class FileStoreError(ReceiptAssistantError):
     """Base exception for upload storage errors."""
 

@@ -11,6 +11,7 @@ class OCRStatus(str, Enum):
 
 class OCRProviderName(str, Enum):
     MOCK = "mock"
+    AZURE = "azure"
 
 
 class CardParseStatus(str, Enum):

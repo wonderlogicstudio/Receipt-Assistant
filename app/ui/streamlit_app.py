@@ -9,13 +9,15 @@ from typing import Iterable, Sequence
 import pandas as pd
 import streamlit as st
 
+from app.core.config import get_config
 from app.core.card_models import CardParseResult, CardTransaction
-from app.core.exceptions import FileStoreError, MissingRequiredColumnsError
+from app.core.exceptions import ConfigurationError, FileStoreError, MissingRequiredColumnsError
 from app.core.enums import OCRStatus
 from app.core.ocr_models import OCRResult
 from app.core.receipt_models import ReceiptRecord
 from app.exporter.excel_exporter import ExcelExporter
-from app.ocr.mock_provider import MockOCRProvider
+from app.ocr.base import OCRProvider
+from app.ocr.provider_factory import get_ocr_provider
 from app.parser.card_statement_parser import CardStatementParser
 from app.parser.receipt_parser import ReceiptParser, parse_amount, parse_date
 from app.storage.file_store import FileStore, StoredFileMetadata
@@ -81,7 +83,8 @@ class ProcessingPipelineResult:
 def run() -> None:
     st.set_page_config(page_title="영수증 OCR 엑셀 비서", layout="wide")
     st.title("영수증 OCR 엑셀 비서 MVP")
-    st.caption("업로드한 증빙을 Mock OCR과 규칙 기반 파서로 정리한 뒤, 사용자가 검수해 표준 엑셀 정리 파일을 만듭니다.")
+    st.caption("업로드한 증빙을 설정된 OCR provider와 규칙 기반 파서로 정리한 뒤, 사용자가 검수해 표준 엑셀 정리 파일을 만듭니다.")
+    st.caption(f"현재 OCR provider: {get_config().ocr_provider}")
 
     file_store = FileStore()
     session_id = ensure_session_id(file_store)
@@ -236,13 +239,17 @@ def process_receipt_files_with_mock_ocr(
     receipt_files: Iterable[StoredFileMetadata],
     *,
     file_store: FileStore | None = None,
+    ocr_provider: OCRProvider | None = None,
 ) -> ReceiptProcessingResult:
-    provider = MockOCRProvider()
     parser = ReceiptParser()
     validator = ReceiptValidator()
     receipt_records: list[ReceiptRecord] = []
     ocr_results: list[OCRResult] = []
     errors: list[str] = []
+    try:
+        provider = ocr_provider or get_ocr_provider()
+    except ConfigurationError as exc:
+        return ReceiptProcessingResult(receipt_records=[], ocr_results=[], errors=[str(exc)])
 
     for metadata in receipt_files:
         source = file_store.resolve_stored_path(metadata) if file_store else metadata

@@ -4,22 +4,99 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 
 DEFAULT_ALLOWED_UPLOAD_EXTENSIONS = frozenset({".jpg", ".jpeg", ".png", ".pdf", ".xlsx", ".csv"})
 DEFAULT_MAX_UPLOAD_SIZE_BYTES = 20 * 1024 * 1024
+DEFAULT_OCR_PROVIDER = "mock"
+DEFAULT_AZURE_MODEL_ID = "prebuilt-receipt"
+DEFAULT_AZURE_API_VERSION = "2024-11-30"
+DEFAULT_OCR_REQUEST_TIMEOUT_SECONDS = 30
+DEFAULT_OUTPUT_ROOT = Path("data/outputs")
+DEFAULT_UPLOAD_RETENTION_DAYS = 7
+DEFAULT_OUTPUT_RETENTION_DAYS = 7
+DEFAULT_CLEANUP_DRY_RUN = True
 
 
 @dataclass(frozen=True)
 class AppConfig:
     upload_root: Path = Path("data/uploads")
     upload_relative_root: Path = Path("data/uploads")
+    output_root: Path = DEFAULT_OUTPUT_ROOT
     max_upload_size_bytes: int = DEFAULT_MAX_UPLOAD_SIZE_BYTES
     allowed_upload_extensions: frozenset[str] = field(default_factory=lambda: DEFAULT_ALLOWED_UPLOAD_EXTENSIONS)
+    upload_retention_days: int = DEFAULT_UPLOAD_RETENTION_DAYS
+    output_retention_days: int = DEFAULT_OUTPUT_RETENTION_DAYS
+    cleanup_dry_run_default: bool = DEFAULT_CLEANUP_DRY_RUN
+    ocr_provider: str = DEFAULT_OCR_PROVIDER
+    azure_document_intelligence_endpoint: str | None = None
+    azure_document_intelligence_key: str | None = None
+    azure_document_intelligence_model_id: str = DEFAULT_AZURE_MODEL_ID
+    azure_document_intelligence_api_version: str = DEFAULT_AZURE_API_VERSION
+    ocr_request_timeout_seconds: int = DEFAULT_OCR_REQUEST_TIMEOUT_SECONDS
 
 
 def get_config() -> AppConfig:
-    upload_root = Path(os.getenv("RECEIPT_ASSISTANT_UPLOAD_ROOT", "data/uploads"))
+    load_dotenv(dotenv_path=Path.cwd() / ".env")
+    upload_root = Path(os.getenv("UPLOAD_DIR") or os.getenv("RECEIPT_ASSISTANT_UPLOAD_ROOT", "data/uploads"))
+    output_root = Path(os.getenv("OUTPUT_DIR", str(DEFAULT_OUTPUT_ROOT)))
     max_upload_size_bytes = int(
         os.getenv("RECEIPT_ASSISTANT_MAX_UPLOAD_SIZE_BYTES", str(DEFAULT_MAX_UPLOAD_SIZE_BYTES))
     )
-    return AppConfig(upload_root=upload_root, max_upload_size_bytes=max_upload_size_bytes)
+    timeout_seconds = int(os.getenv("OCR_REQUEST_TIMEOUT_SECONDS", str(DEFAULT_OCR_REQUEST_TIMEOUT_SECONDS)))
+    timeout_seconds = min(max(timeout_seconds, 1), DEFAULT_OCR_REQUEST_TIMEOUT_SECONDS)
+    return AppConfig(
+        upload_root=upload_root,
+        upload_relative_root=Path("data/uploads"),
+        output_root=output_root,
+        max_upload_size_bytes=max_upload_size_bytes,
+        upload_retention_days=_positive_int_env("UPLOAD_RETENTION_DAYS", DEFAULT_UPLOAD_RETENTION_DAYS),
+        output_retention_days=_positive_int_env("OUTPUT_RETENTION_DAYS", DEFAULT_OUTPUT_RETENTION_DAYS),
+        cleanup_dry_run_default=_bool_env("CLEANUP_DRY_RUN_DEFAULT", DEFAULT_CLEANUP_DRY_RUN),
+        ocr_provider=os.getenv("OCR_PROVIDER", DEFAULT_OCR_PROVIDER).strip().lower() or DEFAULT_OCR_PROVIDER,
+        azure_document_intelligence_endpoint=_optional_env("AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT"),
+        azure_document_intelligence_key=_optional_env("AZURE_DOCUMENT_INTELLIGENCE_KEY"),
+        azure_document_intelligence_model_id=os.getenv(
+            "AZURE_DOCUMENT_INTELLIGENCE_MODEL_ID",
+            DEFAULT_AZURE_MODEL_ID,
+        ).strip()
+        or DEFAULT_AZURE_MODEL_ID,
+        azure_document_intelligence_api_version=os.getenv(
+            "AZURE_DOCUMENT_INTELLIGENCE_API_VERSION",
+            DEFAULT_AZURE_API_VERSION,
+        ).strip()
+        or DEFAULT_AZURE_API_VERSION,
+        ocr_request_timeout_seconds=timeout_seconds,
+    )
+
+
+def _optional_env(name: str) -> str | None:
+    value = os.getenv(name)
+    if value is None:
+        return None
+    value = value.strip()
+    return value or None
+
+
+def _positive_int_env(name: str, default: int) -> int:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+    try:
+        value = int(raw_value.strip())
+    except ValueError:
+        return default
+    return value if value > 0 else default
+
+
+def _bool_env(name: str, default: bool) -> bool:
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+    normalized = raw_value.strip().lower()
+    if normalized in {"1", "true", "yes", "y", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "n", "off"}:
+        return False
+    return default

@@ -220,9 +220,12 @@ def test_cleanup_session_files_dry_run_returns_candidates_without_deleting(tmp_p
     target = session_dir / "receipt.jpg"
     target.write_bytes(b"sample")
 
-    candidates = cleanup_session_files("session1", config=config, dry_run=True)
+    summary = cleanup_session_files("session1", config=config, dry_run=True)
 
-    assert candidates == ["data/uploads/session1/receipt.jpg"]
+    assert summary["scanned_count"] == 1
+    assert summary["eligible_count"] == 1
+    assert summary["deleted_count"] == 0
+    assert "receipt.jpg" not in str(summary)
     assert target.exists()
 
 
