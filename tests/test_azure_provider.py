@@ -24,7 +24,15 @@ class FakeResponse:
 
 
 class FakeSession:
-    def __init__(self, *, post_response=None, get_responses=None, post_exception: Exception | None = None):
+    def __init__(
+        self,
+        *,
+        post_response=None,
+        post_responses=None,
+        get_responses=None,
+        post_exception: Exception | None = None,
+    ):
+        self.post_responses = list(post_responses or [])
         self.post_response = post_response or FakeResponse()
         self.get_responses = list(get_responses or [])
         self.post_exception = post_exception
@@ -35,6 +43,8 @@ class FakeSession:
         self.post_calls.append((url, kwargs))
         if self.post_exception:
             raise self.post_exception
+        if self.post_responses:
+            return self.post_responses.pop(0)
         return self.post_response
 
     def get(self, url, **kwargs):
@@ -56,12 +66,21 @@ def make_config() -> AppConfig:
     )
 
 
-def make_provider(session: FakeSession) -> AzureDocumentIntelligenceProvider:
+def make_provider(
+    session: FakeSession,
+    *,
+    sleep_calls: list[float] | None = None,
+    poll_interval_seconds: float = 1,
+    max_poll_attempts: int = 2,
+    max_retries: int = 3,
+) -> AzureDocumentIntelligenceProvider:
     return AzureDocumentIntelligenceProvider(
         make_config(),
         session=session,
-        poll_interval_seconds=0,
-        max_poll_attempts=2,
+        poll_interval_seconds=poll_interval_seconds,
+        max_poll_attempts=max_poll_attempts,
+        max_retries=max_retries,
+        sleep_func=(sleep_calls.append if sleep_calls is not None else (lambda seconds: None)),
     )
 
 
@@ -116,6 +135,7 @@ def test_azure_provider_http_failure_returns_failed_result(tmp_path):
 
     assert result.status == OCRStatus.FAILED.value
     assert result.error_message == "OCR 요청에 실패했습니다."
+    assert result.diagnostic_code == "analyze_http_500"
 
 
 def test_azure_provider_timeout_returns_failed_result(tmp_path):
@@ -172,3 +192,178 @@ def test_azure_provider_does_not_expose_key_endpoint_or_full_path(tmp_path):
     assert "cognitiveservices.azure.com" not in serialized
     assert str(tmp_path) not in serialized
     assert result.source_file_name == "receipt.jpg"
+
+
+def test_azure_provider_proxy_error_returns_diagnostic_code(tmp_path):
+    session = FakeSession(post_exception=requests.exceptions.ProxyError("proxy"))
+    provider = make_provider(session)
+
+    result = provider.extract(make_sample_file(tmp_path))
+
+    assert result.status == OCRStatus.FAILED.value
+    assert result.error_message == "OCR 요청에 실패했습니다."
+    assert result.diagnostic_code == "proxy_error"
+
+
+def test_azure_provider_operation_failed_returns_diagnostic_code(tmp_path):
+    session = FakeSession(
+        post_response=FakeResponse(status_code=202, headers={"Operation-Location": "https://poll.example/result"}),
+        get_responses=[FakeResponse(payload={"status": "failed"})],
+    )
+    provider = make_provider(session)
+
+    result = provider.extract(make_sample_file(tmp_path))
+
+    assert result.status == OCRStatus.FAILED.value
+    assert result.diagnostic_code == "operation_failed"
+
+
+def test_azure_provider_respects_retry_after_for_running_poll(tmp_path):
+    sleep_calls: list[float] = []
+    session = FakeSession(
+        post_response=FakeResponse(status_code=202, headers={"Operation-Location": "https://poll.example/result"}),
+        get_responses=[
+            FakeResponse(headers={"Retry-After": "4"}, payload={"status": "running"}),
+            FakeResponse(headers={"Retry-After": "3"}, payload={"status": "running"}),
+            FakeResponse(headers={"Retry-After": "2"}, payload={"status": "running"}),
+            FakeResponse(payload=success_payload()),
+        ],
+    )
+    provider = make_provider(session, sleep_calls=sleep_calls, max_poll_attempts=5)
+
+    result = provider.extract(make_sample_file(tmp_path))
+
+    assert result.status == OCRStatus.COMPLETED.value
+    assert sleep_calls == [4.0, 3.0, 2.0]
+
+
+def test_azure_provider_uses_default_poll_interval_when_retry_after_missing(tmp_path):
+    sleep_calls: list[float] = []
+    session = FakeSession(
+        post_response=FakeResponse(status_code=202, headers={"Operation-Location": "https://poll.example/result"}),
+        get_responses=[
+            FakeResponse(payload={"status": "running"}),
+            FakeResponse(payload=success_payload()),
+        ],
+    )
+    provider = make_provider(session, sleep_calls=sleep_calls, poll_interval_seconds=2, max_poll_attempts=3)
+
+    result = provider.extract(make_sample_file(tmp_path))
+
+    assert result.status == OCRStatus.COMPLETED.value
+    assert sleep_calls == [2.0]
+
+
+def test_azure_provider_uses_default_poll_interval_for_invalid_retry_after(tmp_path):
+    sleep_calls: list[float] = []
+    session = FakeSession(
+        post_response=FakeResponse(status_code=202, headers={"Operation-Location": "https://poll.example/result"}),
+        get_responses=[
+            FakeResponse(headers={"Retry-After": "later"}, payload={"status": "running"}),
+            FakeResponse(payload=success_payload()),
+        ],
+    )
+    provider = make_provider(session, sleep_calls=sleep_calls, poll_interval_seconds=2, max_poll_attempts=3)
+
+    result = provider.extract(make_sample_file(tmp_path))
+
+    assert result.status == OCRStatus.COMPLETED.value
+    assert sleep_calls == [2.0]
+
+
+def test_azure_provider_retries_analyze_429_then_completes(tmp_path):
+    sleep_calls: list[float] = []
+    session = FakeSession(
+        post_responses=[
+            FakeResponse(status_code=429, headers={"Retry-After": "2"}),
+            FakeResponse(status_code=202, headers={"Operation-Location": "https://poll.example/result"}),
+        ],
+        get_responses=[FakeResponse(payload=success_payload())],
+    )
+    provider = make_provider(session, sleep_calls=sleep_calls)
+
+    result = provider.extract(make_sample_file(tmp_path))
+
+    assert result.status == OCRStatus.COMPLETED.value
+    assert len(session.post_calls) == 2
+    assert sleep_calls == [2.0]
+
+
+def test_azure_provider_retries_poll_429_then_completes(tmp_path):
+    sleep_calls: list[float] = []
+    session = FakeSession(
+        post_response=FakeResponse(status_code=202, headers={"Operation-Location": "https://poll.example/result"}),
+        get_responses=[
+            FakeResponse(status_code=429, headers={"Retry-After": "3"}),
+            FakeResponse(payload=success_payload()),
+        ],
+    )
+    provider = make_provider(session, sleep_calls=sleep_calls)
+
+    result = provider.extract(make_sample_file(tmp_path))
+
+    assert result.status == OCRStatus.COMPLETED.value
+    assert len(session.get_calls) == 2
+    assert sleep_calls == [3.0]
+
+
+def test_azure_provider_repeated_analyze_500_returns_status_code_reason(tmp_path):
+    sleep_calls: list[float] = []
+    session = FakeSession(post_response=FakeResponse(status_code=500))
+    provider = make_provider(session, sleep_calls=sleep_calls, max_retries=2)
+
+    result = provider.extract(make_sample_file(tmp_path))
+
+    assert result.status == OCRStatus.FAILED.value
+    assert result.diagnostic_code == "analyze_http_500"
+    assert len(session.post_calls) == 3
+
+
+def test_azure_provider_repeated_poll_503_returns_status_code_reason(tmp_path):
+    sleep_calls: list[float] = []
+    session = FakeSession(
+        post_response=FakeResponse(status_code=202, headers={"Operation-Location": "https://poll.example/result"}),
+        get_responses=[
+            FakeResponse(status_code=503),
+            FakeResponse(status_code=503),
+            FakeResponse(status_code=503),
+        ],
+    )
+    provider = make_provider(session, sleep_calls=sleep_calls, max_retries=2)
+
+    result = provider.extract(make_sample_file(tmp_path))
+
+    assert result.status == OCRStatus.FAILED.value
+    assert result.diagnostic_code == "poll_http_503"
+    assert len(session.get_calls) == 3
+
+
+@pytest.mark.parametrize("status_code", [401, 403])
+def test_azure_provider_auth_errors_are_not_retried(tmp_path, status_code):
+    session = FakeSession(post_response=FakeResponse(status_code=status_code))
+    provider = make_provider(session)
+
+    result = provider.extract(make_sample_file(tmp_path))
+
+    assert result.status == OCRStatus.FAILED.value
+    assert result.diagnostic_code == f"analyze_http_{status_code}"
+    assert len(session.post_calls) == 1
+
+
+def test_azure_provider_poll_attempt_limit_returns_failed_result(tmp_path):
+    sleep_calls: list[float] = []
+    session = FakeSession(
+        post_response=FakeResponse(status_code=202, headers={"Operation-Location": "https://poll.example/result"}),
+        get_responses=[
+            FakeResponse(payload={"status": "running"}),
+            FakeResponse(payload={"status": "running"}),
+        ],
+    )
+    provider = make_provider(session, sleep_calls=sleep_calls, max_poll_attempts=2)
+
+    result = provider.extract(make_sample_file(tmp_path))
+
+    assert result.status == OCRStatus.FAILED.value
+    assert result.diagnostic_code == "timeout"
+    assert len(session.get_calls) == 2
+    assert sleep_calls == [1.0]

@@ -11,8 +11,12 @@ from openpyxl import load_workbook
 from app.core.config import AppConfig
 from app.core.enums import CardMatchStatus, ReviewStatus
 from app.core.exceptions import InvalidSessionIdError
+from app.core.ocr_models import OCRResult
+from app.db.repository import JobHistoryRepository
+from app.history.job_service import JobHistoryService
 from app.storage.cleanup import cleanup_session_files
 from app.storage.file_store import FileStore, StoredFileMetadata
+from app.ui.history_utils import jobs_to_history_dataframe
 from app.ui.review_utils import (
     COL_EXPENSE_CATEGORY,
     COL_MERCHANT,
@@ -24,6 +28,7 @@ from app.ui.review_utils import (
 )
 from app.ui.streamlit_app import (
     build_export_filename,
+    save_export_history_once,
     prepare_export_bytes,
     process_card_statement_files,
     process_receipt_files_with_mock_ocr,
@@ -39,6 +44,20 @@ class UploadFileStub:
 
     def getvalue(self) -> bytes:
         return self._data
+
+
+class FailingOCRProvider:
+    provider_name = "azure"
+
+    def extract(self, source):
+        return OCRResult.failed(
+            source_file_id="source-id",
+            source_file_name="receipt.jpg",
+            stored_relative_path=None,
+            provider=self.provider_name,
+            error_message="hidden internal detail",
+            diagnostic_code="proxy_error",
+        )
 
 
 def make_file_store(tmp_path: Path) -> FileStore:
@@ -123,6 +142,23 @@ def test_process_receipt_files_with_mock_ocr_creates_validated_receipts(tmp_path
     assert receipt.recommended_expense_category is not None
     assert receipt.source_file_name == "receipt.jpg"
     assert len(result.ocr_results) == 1
+
+
+def test_process_receipt_failure_reports_safe_ocr_diagnostic(tmp_path):
+    file_store = make_file_store(tmp_path)
+    receipt_metadata = save_upload(file_store, "session1", "receipt.jpg")
+
+    result = process_receipt_files_with_mock_ocr(
+        [receipt_metadata],
+        file_store=file_store,
+        ocr_provider=FailingOCRProvider(),
+    )
+
+    assert result.receipt_records == []
+    assert len(result.errors) == 1
+    assert "status=failed, provider=azure, reason=proxy_error" in result.errors[0]
+    assert "hidden internal detail" not in result.errors[0]
+    assert str(tmp_path) not in result.errors[0]
 
 
 def test_process_card_statement_files_reads_csv_and_xlsx(tmp_path):
@@ -248,3 +284,61 @@ def test_export_does_not_include_local_paths_or_raw_ocr_text(tmp_path):
     assert "data/uploads" not in serialized
     assert "raw_text" not in serialized
     assert "raw_json" not in serialized
+
+
+def test_excel_generation_persists_completed_job_history_once(tmp_path):
+    config = AppConfig(
+        upload_root=tmp_path / "data" / "uploads",
+        upload_relative_root=Path("data/uploads"),
+        output_root=tmp_path / "data" / "outputs",
+        app_db_path=tmp_path / "history.db",
+    )
+    file_store = FileStore(config)
+    service = JobHistoryService(repository=JobHistoryRepository(config=config), config=config)
+    receipt_metadata = save_upload(file_store, "session1", "receipt.jpg")
+    card_metadata = save_upload(file_store, "session1", "card.csv", card_csv_bytes())
+    result = process_uploaded_file_metadata([receipt_metadata, card_metadata], file_store=file_store)
+    export_bytes = prepare_export_bytes(result.receipt_records, result.card_transactions)
+    session_state: dict[str, object] = {}
+
+    job = save_export_history_once(
+        session_state=session_state,
+        session_id="session1",
+        uploaded_files=result.uploaded_file_metadata,
+        receipt_records=result.receipt_records,
+        card_transactions=result.card_transactions,
+        export_file_name="receipt_summary_20260510_120000.xlsx",
+        export_file_bytes=export_bytes,
+        service=service,
+    )
+    duplicate = save_export_history_once(
+        session_state=session_state,
+        session_id="session1",
+        uploaded_files=result.uploaded_file_metadata,
+        receipt_records=result.receipt_records,
+        card_transactions=result.card_transactions,
+        export_file_name="receipt_summary_20260510_120000.xlsx",
+        export_file_bytes=export_bytes,
+        service=service,
+    )
+
+    jobs = service.list_processing_jobs()
+    detail = service.get_processing_job_detail(str(job["id"]))
+    export_file = detail["export_files"][0]
+    serialized_job = "\n".join(str(value) for value in job.values() if value is not None)
+
+    assert duplicate["already_saved"] is True
+    assert len(jobs) == 1
+    assert jobs[0]["receipt_count"] == len(result.receipt_records)
+    assert jobs[0]["card_transaction_count"] == len(result.card_transactions)
+    assert jobs[0]["needs_review_count"] == sum(
+        1 for receipt in result.receipt_records if receipt.review_status == ReviewStatus.NEEDS_REVIEW.value
+    )
+    assert jobs[0]["total_amount"] == sum(receipt.total_amount or 0 for receipt in result.receipt_records)
+    assert export_file["export_file_name"] == "receipt_summary_20260510_120000.xlsx"
+    assert export_file["export_relative_path"] == f"data/outputs/{job['id']}/receipt_summary_20260510_120000.xlsx"
+    assert (config.output_root / str(job["id"]) / "receipt_summary_20260510_120000.xlsx").exists()
+    assert str(tmp_path) not in serialized_job
+    assert "raw_text" not in serialized_job
+    assert "raw_json" not in serialized_job
+    assert not jobs_to_history_dataframe(jobs).empty

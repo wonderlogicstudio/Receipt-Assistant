@@ -4,18 +4,19 @@ from dataclasses import dataclass, replace
 from datetime import date, datetime
 from hashlib import sha256
 from pathlib import Path
-from typing import Iterable, Sequence
+from typing import Iterable, MutableMapping, Sequence
 
 import pandas as pd
 import streamlit as st
 
 from app.core.config import get_config
 from app.core.card_models import CardParseResult, CardTransaction
-from app.core.exceptions import ConfigurationError, FileStoreError, MissingRequiredColumnsError
+from app.core.exceptions import ConfigurationError, FileStoreError, MissingRequiredColumnsError, ReceiptAssistantError
 from app.core.enums import OCRStatus
 from app.core.ocr_models import OCRResult
 from app.core.receipt_models import ReceiptRecord
 from app.exporter.excel_exporter import ExcelExporter
+from app.history.job_service import JobHistoryService
 from app.ocr.base import OCRProvider
 from app.ocr.provider_factory import get_ocr_provider
 from app.parser.card_statement_parser import CardStatementParser
@@ -82,6 +83,10 @@ class ProcessingPipelineResult:
 
 def run() -> None:
     st.set_page_config(page_title="영수증 OCR 엑셀 비서", layout="wide")
+    render_new_job_view()
+
+
+def render_new_job_view() -> None:
     st.title("영수증 OCR 엑셀 비서 MVP")
     st.caption("업로드한 증빙을 설정된 OCR provider와 규칙 기반 파서로 정리한 뒤, 사용자가 검수해 표준 엑셀 정리 파일을 만듭니다.")
     st.caption(f"현재 OCR provider: {get_config().ocr_provider}")
@@ -97,20 +102,44 @@ def run() -> None:
     )
 
     st.subheader("2단계: 파일 처리")
-    if st.button("파일 저장 및 처리", type="primary", disabled=not uploaded_files):
-        result = save_and_process_uploaded_files(uploaded_files or [], file_store=file_store, session_id=session_id)
-        st.session_state["uploaded_file_metadata"] = result.uploaded_file_metadata
-        st.session_state["stored_files"] = result.uploaded_file_metadata
-        st.session_state["ocr_results"] = result.ocr_results
-        st.session_state["card_parse_results"] = result.card_parse_results
-        st.session_state["card_transactions"] = result.card_transactions
-        st.session_state["receipt_records"] = result.receipt_records
-        st.session_state["reviewed_receipt_records"] = result.receipt_records
-        st.session_state["export_file_bytes"] = None
-        st.session_state["export_file_name"] = None
+    is_processing = bool(st.session_state.get("is_processing", False))
+    if is_processing:
+        st.info("파일 저장 및 처리 중입니다. 완료될 때까지 잠시만 기다려 주세요.")
 
-        for message in result.errors:
-            st.warning(message)
+    process_clicked = st.button(
+        "파일 저장 및 처리",
+        type="primary",
+        disabled=should_disable_process_button(uploaded_files, is_processing),
+    )
+    if process_clicked and not is_processing:
+        st.session_state["is_processing"] = True
+        progress = st.progress(0, text="처리 준비 중입니다.")
+        try:
+            with st.status("파일 저장 및 처리 중입니다.", expanded=True) as status:
+                status.write("업로드 파일을 안전하게 저장하는 중입니다.")
+                progress.progress(15, text="업로드 파일 저장 중입니다.")
+                result = save_and_process_uploaded_files(uploaded_files or [], file_store=file_store, session_id=session_id)
+
+                status.write("OCR/Parser 처리 결과를 정리하는 중입니다.")
+                progress.progress(85, text="OCR/Parser 처리 결과를 정리하는 중입니다.")
+                st.session_state["uploaded_file_metadata"] = result.uploaded_file_metadata
+                st.session_state["stored_files"] = result.uploaded_file_metadata
+                st.session_state["ocr_results"] = result.ocr_results
+                st.session_state["card_parse_results"] = result.card_parse_results
+                st.session_state["card_transactions"] = result.card_transactions
+                st.session_state["receipt_records"] = result.receipt_records
+                st.session_state["reviewed_receipt_records"] = result.receipt_records
+                st.session_state["export_file_bytes"] = None
+                st.session_state["export_file_name"] = None
+                reset_export_history_state(st.session_state)
+
+                progress.progress(100, text="처리 완료")
+                status.update(label="처리 완료", state="complete", expanded=False)
+
+            for message in result.errors:
+                st.warning(message)
+        finally:
+            st.session_state["is_processing"] = False
 
     uploaded_metadata = st.session_state.get("uploaded_file_metadata", st.session_state.get("stored_files", []))
     receipt_records: list[ReceiptRecord] = (
@@ -137,11 +166,32 @@ def run() -> None:
     st.subheader("4단계: 엑셀 다운로드")
     if st.button("표준 엑셀 생성", type="secondary"):
         try:
-            st.session_state["export_file_bytes"] = prepare_export_bytes(reviewed_records, card_transactions)
-            st.session_state["export_file_name"] = build_export_filename()
+            export_bytes = prepare_export_bytes(reviewed_records, card_transactions)
+            export_file_name = build_export_filename()
+            st.session_state["export_file_bytes"] = export_bytes
+            st.session_state["export_file_name"] = export_file_name
             st.success("엑셀 파일이 생성되었습니다.")
         except Exception as exc:  # pragma: no cover - Streamlit error guard
             st.error(f"엑셀 파일을 생성하지 못했습니다: {exc.__class__.__name__}")
+        else:
+            try:
+                saved_job = save_export_history_once(
+                    session_state=st.session_state,
+                    session_id=session_id,
+                    uploaded_files=uploaded_metadata,
+                    receipt_records=reviewed_records,
+                    card_transactions=card_transactions,
+                    export_file_name=export_file_name,
+                    export_file_bytes=export_bytes,
+                )
+                if saved_job.get("already_saved"):
+                    st.info("처리 이력에 이미 저장된 작업입니다.")
+                else:
+                    st.success("처리 이력에 저장되었습니다.")
+            except ReceiptAssistantError:
+                st.warning("처리 이력 저장에 실패했지만 엑셀 다운로드는 가능합니다.")
+            except Exception:
+                st.warning("처리 이력 저장에 실패했지만 엑셀 다운로드는 가능합니다.")
 
     if st.session_state.get("export_file_bytes"):
         st.download_button(
@@ -150,6 +200,111 @@ def run() -> None:
             file_name=st.session_state.get("export_file_name") or build_export_filename(),
             mime=EXPORT_MIME_TYPE,
         )
+
+
+def save_export_history_once(
+    *,
+    session_state: MutableMapping[str, object],
+    session_id: str,
+    uploaded_files: Iterable[StoredFileMetadata | dict[str, object]],
+    receipt_records: Iterable[ReceiptRecord | dict[str, object]],
+    card_transactions: Iterable[CardTransaction | dict[str, object]],
+    export_file_name: str,
+    export_file_bytes: bytes,
+    service: JobHistoryService | None = None,
+) -> dict[str, object]:
+    uploaded_file_list = list(uploaded_files)
+    receipt_record_list = list(receipt_records)
+    card_transaction_list = list(card_transactions)
+    signature = build_export_history_signature(
+        session_id=session_id,
+        uploaded_files=uploaded_file_list,
+        receipt_records=receipt_record_list,
+        card_transactions=card_transaction_list,
+    )
+    saved_job_id = session_state.get("saved_job_id")
+    if saved_job_id and session_state.get("saved_export_signature") == signature:
+        return {"id": saved_job_id, "already_saved": True}
+
+    history_service = service or JobHistoryService()
+    job = history_service.save_job_result(
+        session_id=session_id,
+        uploaded_files=uploaded_file_list,
+        receipt_records=receipt_record_list,
+        card_transactions=card_transaction_list,
+        export_file={
+            "session_id": session_id,
+            "export_file_name": export_file_name,
+            "export_bytes": export_file_bytes,
+        },
+        status="completed",
+    )
+    session_state["saved_job_id"] = str(job["id"])
+    session_state["saved_export_signature"] = signature
+    return job
+
+
+def reset_export_history_state(session_state: MutableMapping[str, object]) -> None:
+    session_state.pop("saved_job_id", None)
+    session_state.pop("saved_export_signature", None)
+
+
+def build_export_history_signature(
+    *,
+    session_id: str,
+    uploaded_files: Iterable[StoredFileMetadata | dict[str, object]],
+    receipt_records: Iterable[ReceiptRecord | dict[str, object]],
+    card_transactions: Iterable[CardTransaction | dict[str, object]],
+) -> str:
+    hasher = sha256()
+
+    def update(value: object) -> None:
+        hasher.update(str(value or "").encode("utf-8"))
+        hasher.update(b"\0")
+
+    update(session_id)
+    upload_rows = sorted(
+        (_history_item_dict(item) for item in uploaded_files),
+        key=lambda row: str(row.get("stored_relative_path") or ""),
+    )
+    for item in upload_rows:
+        update(item.get("stored_relative_path"))
+        update(item.get("file_size_bytes"))
+        update(item.get("file_extension"))
+
+    receipt_fields = (
+        "receipt_id",
+        "id",
+        "transaction_date",
+        "merchant_name",
+        "total_amount",
+        "supply_amount",
+        "vat_amount",
+        "expense_category",
+        "review_status",
+        "review_reason",
+        "card_match_status",
+        "duplicate_group_id",
+        "export_included",
+    )
+    receipt_rows = sorted(
+        (_history_item_dict(item) for item in receipt_records),
+        key=lambda row: str(row.get("id") or row.get("receipt_id") or ""),
+    )
+    for item in receipt_rows:
+        for field in receipt_fields:
+            update(item.get(field))
+
+    card_fields = ("id", "transaction_date", "merchant_name", "total_amount", "card_name", "parse_status")
+    card_rows = sorted(
+        (_history_item_dict(item) for item in card_transactions),
+        key=lambda row: str(row.get("id") or ""),
+    )
+    for item in card_rows:
+        for field in card_fields:
+            update(item.get(field))
+
+    return hasher.hexdigest()
 
 
 def ensure_session_id(file_store: FileStore) -> str:
@@ -256,7 +411,10 @@ def process_receipt_files_with_mock_ocr(
         ocr_result = _copy_ocr_result_metadata(provider.extract(source), metadata)
         ocr_results.append(ocr_result)
         if ocr_result.status != OCRStatus.COMPLETED.value:
-            errors.append(f"{_display_file_name(metadata.original_file_name)}: OCR 처리 상태를 확인해 주세요.")
+            errors.append(
+                f"{_display_file_name(metadata.original_file_name)}: "
+                f"OCR 처리 상태를 확인해 주세요. ({format_ocr_diagnostic(ocr_result)})"
+            )
             continue
         receipt_records.append(validator.validate(parser.parse(ocr_result)))
 
@@ -403,6 +561,26 @@ def _copy_ocr_result_metadata(ocr_result: OCRResult, metadata: StoredFileMetadat
     )
 
 
+def format_ocr_diagnostic(ocr_result: OCRResult) -> str:
+    status = _safe_diagnostic_token(ocr_result.status, fallback="unknown")
+    provider = _safe_diagnostic_token(ocr_result.provider, fallback="unknown")
+    reason = _safe_diagnostic_token(ocr_result.diagnostic_code, fallback="ocr_status_not_completed")
+    return f"status={status}, provider={provider}, reason={reason}"
+
+
+def should_disable_process_button(uploaded_files: Sequence[object] | None, is_processing: bool) -> bool:
+    return is_processing or not uploaded_files
+
+
+def _safe_diagnostic_token(value: object, *, fallback: str) -> str:
+    text = str(value or "").strip().lower()
+    if not text:
+        return fallback
+    safe = "".join(character if character.isalnum() or character in {"_", "-"} else "_" for character in text)
+    safe = "_".join(part for part in safe.split("_") if part)
+    return safe or fallback
+
+
 def _source_file_id(metadata: StoredFileMetadata) -> str:
     return sha256(metadata.stored_relative_path.encode("utf-8")).hexdigest()
 
@@ -418,6 +596,16 @@ def _as_optional_text(value: object) -> str | None:
 
 def _as_date(value: object) -> date | None:
     return parse_date(value)
+
+
+def _history_item_dict(item: object) -> dict[str, object]:
+    if isinstance(item, dict):
+        return dict(item)
+    if hasattr(item, "to_dict"):
+        return item.to_dict()
+    if hasattr(item, "__dict__"):
+        return dict(item.__dict__)
+    return {}
 
 
 def _display_file_name(file_name: str) -> str:

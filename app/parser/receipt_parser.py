@@ -4,10 +4,14 @@ import re
 from pathlib import Path
 from typing import Any
 
+from app.classifier.merchant_dictionary import find_merchant_by_business_number
 from app.core.enums import EvidenceType, OCRStatus, ReviewStatus
 from app.core.ocr_models import OCRResult
 from app.core.receipt_models import ReceiptRecord
 from app.parser.normalizers import (
+    is_overlay_text,
+    is_product_line_text,
+    is_receipt_metadata_line,
     normalize_amount,
     normalize_business_number,
     normalize_date,
@@ -20,6 +24,46 @@ TOTAL_AMOUNT_KEYWORDS = ("합계", "총액", "총금액", "결제금액", "받�
 VAT_KEYWORDS = ("부가세", "VAT", "세액")
 SUPPLY_AMOUNT_KEYWORDS = ("공급가액", "공급가", "과세금액")
 BUSINESS_NUMBER_KEYWORDS = ("사업자번호", "사업자등록번호")
+MERCHANT_LABEL_KEYWORDS = ("상호명", "상호", "가맹점명", "매장명")
+MERCHANT_JSON_KEYS = (
+    "merchant_name",
+    "MerchantName",
+    "merchant",
+    "Merchant",
+    "vendor",
+    "Vendor",
+    "vendor_name",
+    "VendorName",
+    "store",
+    "Store",
+    "store_name",
+    "StoreName",
+    "shop_name",
+    "ShopName",
+    "name",
+    "Name",
+)
+MERCHANT_CONTEXT_KEYWORDS = ("사업자번호", "사업자등록번호", "전화", "TEL", "tel", "주소")
+MERCHANT_BUSINESS_KEYWORDS = (
+    "마트",
+    "이마트",
+    "카페",
+    "커피",
+    "편의점",
+    "약국",
+    "문구",
+    "서점",
+    "택시",
+    "주차",
+    "우체국",
+    "스타벅스",
+    "투썸",
+    "다이소",
+    "식당",
+    "분식",
+    "김밥",
+    "병원",
+)
 PAYMENT_METHOD_KEYWORDS = (
     ("현금영수증", "현금영수증"),
     ("체크카드", "체크카드"),
@@ -88,13 +132,13 @@ class ReceiptParser:
             or _extract_keyword_value(raw_text, DATE_KEYWORDS, DATE_PATTERN)
             or _find_first(raw_text, DATE_PATTERN)
         )
-        merchant_name = normalize_merchant_name(_merchant_from_json(raw_json) or _merchant_from_text(raw_text))
         business_number_value = (
             raw_json.get("business_number")
             or _extract_keyword_value(raw_text, BUSINESS_NUMBER_KEYWORDS, BUSINESS_NUMBER_VALUE_PATTERN)
             or _find_first(raw_text, BUSINESS_NUMBER_PATTERN)
         )
         business_number = normalize_business_number(business_number_value)
+        merchant_name, merchant_warnings = _extract_merchant_name(raw_text, raw_json, business_number)
         total_amount = normalize_amount(
             raw_json.get("total_amount") or _extract_keyword_value(raw_text, TOTAL_AMOUNT_KEYWORDS, AMOUNT_PATTERN)
         )
@@ -115,15 +159,17 @@ class ReceiptParser:
             "supply_amount": supply_amount,
             "vat_amount": vat_amount,
             "payment_method": payment_method,
+            "parser_warnings": merchant_warnings,
         }
 
     def _build_warnings(self, fields: dict[str, Any], ocr_result: OCRResult) -> list[str]:
-        warnings: list[str] = []
+        warnings: list[str] = list(fields.get("parser_warnings", []))
         if ocr_result.status != OCRStatus.COMPLETED.value:
             warnings.append(f"OCR 상태 확인 필요: {ocr_result.status}")
         if fields["transaction_date"] is None:
             warnings.append("날짜누락")
         if not fields["merchant_name"]:
+            warnings.append("merchant_name_missing_or_low_confidence")
             warnings.append("상호누락")
         if fields["total_amount"] is None:
             warnings.append("금액누락")
@@ -131,7 +177,7 @@ class ReceiptParser:
             warnings.append("사업자번호 형식 확인 필요")
         if fields["total_amount"] is None and raw_amount_candidate_exists(ocr_result.raw_text):
             warnings.append("금액 추출 실패")
-        return warnings
+        return _unique(warnings)
 
     def _review_reason(self, warnings: list[str]) -> str:
         if not warnings:
@@ -161,72 +207,128 @@ def _find_first(text: str, pattern: str) -> str | None:
     return match.group(0).strip()
 
 
+def _extract_merchant_name(
+    raw_text: str,
+    raw_json: dict[str, Any],
+    business_number: str | None,
+) -> tuple[str | None, list[str]]:
+    merchant_from_json = _merchant_from_json(raw_json)
+    if _is_usable_merchant_candidate(merchant_from_json):
+        return normalize_merchant_name(merchant_from_json), []
+
+    merchant_from_business_number = find_merchant_by_business_number(business_number)
+    if merchant_from_business_number:
+        return merchant_from_business_number, []
+
+    merchant_from_labeled_text = _merchant_from_labeled_text(raw_text)
+    if _is_usable_merchant_candidate(merchant_from_labeled_text):
+        return normalize_merchant_name(merchant_from_labeled_text), []
+
+    merchant_from_context, context_warning = _merchant_from_receipt_context(raw_text)
+    if _is_usable_merchant_candidate(merchant_from_context):
+        warnings = [context_warning] if context_warning else []
+        return normalize_merchant_name(merchant_from_context), warnings
+
+    return None, []
+
+
 def _merchant_from_json(raw_json: dict[str, Any]) -> str | None:
-    for key in ("merchant_name", "merchant", "vendor", "vendor_name", "store", "store_name", "name"):
-        value = raw_json.get(key)
-        if value:
-            return str(value)
-    pages = raw_json.get("pages")
-    if isinstance(pages, list):
-        for page in pages:
-            if not isinstance(page, dict):
-                continue
-            fields = page.get("fields")
-            if isinstance(fields, dict):
-                for key in ("merchant_name", "merchant", "vendor", "store_name"):
-                    if fields.get(key):
-                        return str(fields[key])
+    return _find_merchant_value_in_json(raw_json)
+
+
+def _find_merchant_value_in_json(value: Any) -> str | None:
+    if isinstance(value, dict):
+        for key in MERCHANT_JSON_KEYS:
+            if key in value:
+                candidate = _raw_json_field_value(value[key])
+                if candidate:
+                    return candidate
+        for nested_value in value.values():
+            candidate = _find_merchant_value_in_json(nested_value)
+            if candidate:
+                return candidate
+    if isinstance(value, list):
+        for item in value:
+            candidate = _find_merchant_value_in_json(item)
+            if candidate:
+                return candidate
     return None
 
 
-def _merchant_from_text(raw_text: str) -> str | None:
-    for line in raw_text.splitlines()[:5]:
+def _raw_json_field_value(value: Any) -> str | None:
+    if isinstance(value, dict):
+        for key in ("value", "valueString", "content", "text"):
+            if value.get(key):
+                return str(value[key])
+        value_currency = value.get("valueCurrency")
+        if isinstance(value_currency, dict) and value_currency.get("amount") is not None:
+            return str(value_currency["amount"])
+        return None
+    if value is not None and value != "":
+        return str(value)
+    return None
+
+
+def _merchant_from_labeled_text(raw_text: str) -> str | None:
+    for line in raw_text.splitlines():
         candidate = normalize_merchant_name(line)
-        if not candidate:
-            continue
-        labeled = _merchant_from_labeled_line(candidate)
-        if labeled:
+        labeled = _merchant_from_labeled_line(candidate or "")
+        if _is_usable_merchant_candidate(labeled):
             return labeled
-        if _looks_like_metadata(candidate):
-            continue
-        return candidate
     return None
+
+
+def _merchant_from_receipt_context(raw_text: str) -> tuple[str | None, str | None]:
+    lines = [normalize_merchant_name(line) for line in raw_text.splitlines()]
+    clean_lines = [line for line in lines if line]
+    for index, line in enumerate(clean_lines):
+        if not any(keyword in line for keyword in MERCHANT_CONTEXT_KEYWORDS):
+            continue
+        for neighbor_index in (index - 2, index - 1, index + 1):
+            if neighbor_index < 0 or neighbor_index >= len(clean_lines):
+                continue
+            candidate = clean_lines[neighbor_index]
+            if not _is_usable_merchant_candidate(candidate):
+                continue
+            if _has_business_keyword(candidate):
+                return candidate, None
+            return candidate, "merchant_name_low_confidence"
+
+    for line in clean_lines[:8]:
+        if not _is_usable_merchant_candidate(line):
+            continue
+        if _has_business_keyword(line):
+            return line, None
+    return None, None
 
 
 def _merchant_from_labeled_line(line: str) -> str | None:
-    match = re.match(r"(?:상호명|상호|가맹점명|매장명)\s*[:：]\s*(.+)", line)
+    match = re.match(rf"(?:{'|'.join(MERCHANT_LABEL_KEYWORDS)})\s*[:：]\s*(.+)", line)
     if not match:
         return None
     return normalize_merchant_name(match.group(1))
 
 
-def _looks_like_metadata(value: str) -> bool:
-    metadata_keywords = (
-        "사업자번호",
-        "사업자등록번호",
-        "거래일자",
-        "상호명",
-        "상호",
-        "가맹점명",
-        "승인일자",
-        "일자",
-        "공급가액",
-        "부가세",
-        "합계",
-        "총액",
-        "총금액",
-        "결제금액",
-        "결제수단",
-    )
-    if any(keyword in value for keyword in metadata_keywords):
-        return True
-    if re.search(DATE_PATTERN, value):
-        return True
-    if re.search(BUSINESS_NUMBER_PATTERN, value):
-        return True
-    if re.search(AMOUNT_PATTERN, value) and any(char.isdigit() for char in value):
-        return True
-    return False
+def _is_usable_merchant_candidate(value: str | None) -> bool:
+    candidate = normalize_merchant_name(value)
+    if not candidate:
+        return False
+    if is_overlay_text(candidate):
+        return False
+    if is_product_line_text(candidate):
+        return False
+    if is_receipt_metadata_line(candidate):
+        return False
+    return True
+
+
+def is_valid_merchant_candidate(value: str | None) -> bool:
+    return _is_usable_merchant_candidate(value)
+
+
+def _has_business_keyword(value: str) -> bool:
+    normalized = normalize_merchant_name(value) or ""
+    return any(keyword.lower() in normalized.lower() for keyword in MERCHANT_BUSINESS_KEYWORDS)
 
 
 def _extract_payment_method(raw_text: str) -> str | None:
@@ -262,6 +364,14 @@ def _display_file_name(file_name: str) -> str:
 
 def raw_amount_candidate_exists(raw_text: str) -> bool:
     return bool(re.search(AMOUNT_PATTERN, raw_text or ""))
+
+
+def _unique(values: list[str]) -> list[str]:
+    result: list[str] = []
+    for value in values:
+        if value and value not in result:
+            result.append(value)
+    return result
 
 
 parse_date = normalize_date

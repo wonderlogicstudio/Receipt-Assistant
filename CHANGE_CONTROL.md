@@ -1,124 +1,103 @@
-# CHANGE_CONTROL.md
-
 # 변경 관리 규칙
 
-## 1. 왜 필요한가
+## 1. 목적
 
-개발을 진행하다 보면 README.md, PLAN.md, SPEC.md가 자주 바뀔 수 있습니다. 문서가 계속 흔들리면 Codex가 다른 방향으로 구현할 가능성이 커집니다.
+이 문서는 영수증 OCR 엑셀 비서 MVP의 범위, 문서, 코드 변경을 안전하게 관리하기 위한 기준입니다.
 
-따라서 이 프로젝트는 변경을 아래 기준으로 관리합니다.
+## 2. 고정 방향
 
----
-
-## 2. 방향 고정 원칙
-
-MVP의 고정 방향:
+MVP의 고정 방향은 다음과 같습니다.
 
 ```text
-영수증 이미지/PDF + 카드 사용내역 엑셀 업로드
-→ OCR 추출
-→ 구조화
-→ 검증
+영수증 이미지/PDF + 카드 사용내역 CSV/XLSX 업로드
+→ OCR/Parser 처리
 → 사용자 검수
-→ 표준 엑셀 다운로드
+→ 세무사 전달용 표준 엑셀 정리 파일 다운로드
+→ 처리 이력 조회와 기존 export 파일 재다운로드
 ```
 
-아래 기능은 방향 변경이 아니라 후순위 확장입니다.
-
-- 로그인
-- 결제
-- 모바일 앱
-- 홈택스 연동
-- 카드사 연동
-- 전문가 판단 영역의 결론 제공
-- 회계 판단 결과의 확정 표현
-- 회계 프로그램 연동
-
-이 기능이 필요해 보여도 MVP 4주 계획에 끼워 넣지 않습니다.
-
----
+MVP는 증빙 정리 보조 도구입니다. 사용자 확인 없이 결과를 확정하지 않습니다.
 
 ## 3. 문서 변경이 필요한 경우
 
-| 상황 | 수정해야 할 문서 |
+| 변경 내용 | 함께 확인할 문서 |
 |---|---|
-| MVP 범위가 바뀜 | README.md, PLAN.md, DECISIONS.md |
-| 데이터 모델이 바뀜 | SPEC.md, tests |
-| 엑셀 시트/컬럼이 바뀜 | SPEC.md, CHECKLIST.md |
-| 기술 스택이 바뀜 | README.md, AGENTS.md, PLAN.md |
-| 테스트 명령이 바뀜 | README.md, AGENTS.md |
-| 개발 순서가 바뀜 | PLAN.md, DECISIONS.md |
+| 실행 방법 변경 | README.md, AGENTS.md |
+| MVP 범위 변경 | README.md, PLAN.md, DECISIONS.md |
+| 데이터 모델 변경 | SPEC.md, tests |
+| 엑셀 시트/컬럼 변경 | SPEC.md, CHECKLIST.md, docs/sample_output_schema.md |
+| 처리 이력 DB 구조 변경 | SPEC.md, PLAN.md |
+| 화면 메뉴 변경 | README.md, PLAN.md, CHECKLIST.md |
+| 파일럿 절차 변경 | docs/pilot_guide.md, docs/sample_user_flow.md |
+| 테스트 명령 변경 | README.md, AGENTS.md |
 
----
+## 4. 변경 절차
 
-## 4. 변경 제안 형식
+1. 관련 문서와 코드를 먼저 확인한다.
+2. 기능 변경이 필요한지, 문서 동기화만 필요한지 구분한다.
+3. MVP 범위를 넓히는 변경은 바로 구현하지 않고 결정 기록을 남긴다.
+4. 코드 변경이 있으면 테스트를 함께 작성하거나 기존 테스트를 확인한다.
+5. 주요 결정은 DECISIONS.md에 기록한다.
+6. `python -m compileall app tests`와 `python -m pytest`를 실행한다.
+7. Git 변경사항에 민감 파일이 포함되지 않았는지 확인한다.
 
-Codex 또는 개발자는 방향 변경이 필요할 때 아래 형식으로 제안합니다.
+## 5. 금지되는 변경
 
-```text
-변경 제안 제목:
-현재 문서 기준:
-변경하려는 내용:
-변경 이유:
-영향 받는 파일:
-장점:
-리스크:
-MVP 일정 영향:
-권장 여부:
+명시적 요청 없이 아래 작업을 진행하지 않습니다.
+
+- 로그인/권한관리
+- 결제 기능
+- 클라우드 배포
+- 모바일 앱
+- 홈택스/카드사 연동
+- 회계 프로그램 API 연동
+- 과거 작업 재검수
+- 과거 엑셀 재생성
+- 실제 cleanup 삭제 버튼
+- API key 입력 UI
+- OCR Provider 변경 UI
+- OpenAI API 기반 전체 자동 보정
+- 장기 파일 보관 전제 기능
+
+## 6. 보안 기준
+
+문서, 코드, 테스트, 화면, DB, 엑셀에는 아래 정보가 노출되면 안 됩니다.
+
+- `.env` 내용
+- API key, secret, token, password
+- Azure endpoint 전체 URL
+- 전체 로컬 절대경로
+- OCR raw text 전체
+- provider raw JSON 전체
+- 카드 사용내역 원문 전체
+- 실제 카드번호 전체
+- 주민번호, 전화번호 등 민감정보
+- 실제 고객 파일
+
+## 7. 문서 동기화 전용 작업
+
+코드 기능 변경 없이 문서만 현재 구현과 맞추는 경우:
+
+1. README.md, PLAN.md, SPEC.md, CHECKLIST.md, DECISIONS.md, CHANGE_CONTROL.md를 확인한다.
+2. app/, tests/, requirements.txt, .env.example, .gitignore, docs/를 읽기 전용으로 확인한다.
+3. 실제 구현과 다른 문서만 수정한다.
+4. 구현되지 않은 기능을 구현된 것처럼 쓰지 않는다.
+5. 문서에 실제 key, 개인정보, 전체 로컬 경로, 실제 파일명을 넣지 않는다.
+6. 수정 후 compileall과 pytest를 실행한다.
+
+## 8. 커밋 전 확인
+
+```bash
+python -m compileall app tests
+python -m pytest
+git status
+git diff --check
 ```
 
-사용자가 승인하기 전에는 큰 방향 변경을 코드에 반영하지 않습니다.
+확인 항목:
 
----
-
-## 5. 변경 승인 후 처리
-
-변경이 승인되면 아래 순서로 처리합니다.
-
-1. DECISIONS.md에 결정 기록 추가
-2. README.md/PLAN.md/SPEC.md 중 영향 받는 문서 수정
-3. 필요한 테스트 수정
-4. 코드 수정
-5. compileall/pytest 실행
-6. docs 커밋과 code 커밋을 분리할지 판단
-
----
-
-## 6. 금지되는 변경
-
-명시적 승인 없이 아래 변경은 하지 않습니다.
-
-| 금지 변경 | 이유 |
-|---|---|
-| Streamlit에서 Next.js로 즉시 전환 | MVP 일정이 늘어남 |
-| OpenAI API 필수 의존성화 | 비용/개인정보/장애 포인트 증가 |
-| 홈택스 연동 추가 | 법적/보안 리스크 큼 |
-| 카드사 자동 연동 추가 | 인증/약관/운영 리스크 큼 |
-| 모바일 네이티브 앱 개발 | 웹 검증 전 과투자 |
-| 전문가 판단 영역의 결론 제공 기능 | 서비스 포지션 리스크 큼 |
-
----
-
-## 7. 문서 최신성 점검 질문
-
-매주 마지막에 아래 질문에 답합니다.
-
-1. README.md의 실행 방법이 실제로 맞는가?
-2. PLAN.md의 이번 주 목표가 실제 구현과 맞는가?
-3. SPEC.md의 데이터 모델이 코드와 맞는가?
-4. CHECKLIST.md의 완료 항목이 실제 테스트와 맞는가?
-5. DECISIONS.md에 중요한 결정이 기록되었는가?
-
----
-
-## 8. 문서 동기화 전용 작업 절차
-
-코드 기능 변경 없이 문서만 현재 구현과 맞추는 경우에는 아래 순서를 따른다.
-
-1. README.md, PLAN.md, SPEC.md, CHECKLIST.md, AGENTS.md, DECISIONS.md, CHANGE_CONTROL.md를 읽는다.
-2. app/, tests/, requirements.txt, .env.example, .gitignore, docs/는 읽기 전용으로 확인한다.
-3. 코드와 문서가 다른 부분만 문서에 반영한다.
-4. MVP 범위가 바뀌는 내용은 문서 동기화 작업에 포함하지 않는다.
-5. 주요 결정이나 운영 원칙이 새로 정리되면 DECISIONS.md에 기록한다.
-6. 문서에 실제 API key, 개인정보, 전체 로컬 경로, 실제 파일명을 넣지 않는다.
-7. 문서 수정 후 `python -m compileall app tests`와 `python -m pytest`를 실행한다.
+- `.env`가 포함되지 않는다.
+- `data/uploads`, `data/outputs`, `output` 실제 파일이 포함되지 않는다.
+- `data/app.db`, `*.db`가 포함되지 않는다.
+- 실제 고객 파일이나 실제 영수증 파일이 포함되지 않는다.
+- 테스트가 통과한다.

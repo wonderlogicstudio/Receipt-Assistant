@@ -1,256 +1,247 @@
-# SPEC.md
+# 기능 명세
 
-# 영수증 OCR 엑셀 비서 기능 명세
-
-## 1. 핵심 워크플로우
+## 1. 핵심 흐름
 
 ```text
-영수증 이미지/PDF 업로드
-+ 카드 사용내역 엑셀 업로드
-        ↓
-OCR Provider 실행
-        ↓
-OCR 결과 객체 생성
-        ↓
-Receipt Parser로 구조화
-        ↓
-Validator로 오류/누락/중복/카드매칭 검증
-        ↓
-사용자 검수
-        ↓
-Excel Exporter로 표준 엑셀 생성
-        ↓
-다운로드
+영수증 이미지/PDF 업로드 + 카드 사용내역 CSV/XLSX 업로드
+→ OCR Provider 실행
+→ OCRResult 생성
+→ ReceiptParser로 ReceiptRecord 생성
+→ Validator, 비용항목 추천, 중복 의심 탐지, 카드 매칭
+→ 사용자 검수
+→ ExcelExporter로 표준 엑셀 정리 파일 생성
+→ 처리 이력 DB 저장
+→ 다운로드 및 처리 이력 재다운로드
 ```
 
----
+OCR 결과와 분류 후보는 사용자가 확인해야 합니다.
 
-## 2. 데이터 모델
+## 2. Core 모델
 
-## 2.1 ReceiptRecord
+### ReceiptRecord
 
-| 필드 | 타입 | 필수 | 설명 |
-|---|---|---:|---|
-| id | str | Y | 내부 고유 ID |
-| session_id | str/null | N | 처리 세션 ID |
-| source_file_id | str | Y | 원본 파일 ID |
-| ocr_result_id | str/null | N | OCR 결과 ID |
-| source_file_name | str | Y | 원본 파일명 |
-| stored_relative_path | str/null | N | 내부 저장 상대 경로 |
-| transaction_date | date/null | N | 사용일자 |
-| merchant_name | str/null | N | 상호 |
-| business_number | str/null | N | 사업자번호 |
-| evidence_type | str | Y | receipt_image, receipt_pdf, ocr_text, manual |
-| payment_method | str | Y | 카드, 현금, 계좌이체, 미확인 |
-| supply_amount | int/null | N | 공급가액 |
-| vat_amount | int/null | N | 부가세 |
-| total_amount | int/null | N | 총액 |
-| recommended_expense_category | str/null | N | 시스템 추천 비용항목 |
-| recommended_expense_category_reason | str/null | N | 추천 근거 |
-| expense_category | str/null | N | 사용자가 검수한 최종 비용항목 |
-| card_match_status | str | Y | matched, candidate, unmatched, mismatch, needs_review |
-| review_status | str | Y | pending, needs_review, approved, rejected, excluded |
-| review_reason | str | Y | 검토 사유 텍스트 |
-| review_reasons | list[str] | Y | 검토 사유 목록 |
-| confidence | float/null | N | OCR 신뢰도 |
-| parser_warnings | list[str] | Y | 파서 경고 목록 |
-| validation_warnings | list[str] | Y | 검증 경고 목록 |
-| validator_version | str/null | N | 검증 규칙 버전 |
-| matched_card_transaction_id | str/null | N | 매칭된 카드 사용내역 ID |
-| card_match_score | float/null | N | 카드 매칭 점수 |
-| card_match_reason | str/null | N | 카드 매칭 사유 |
-| card_match_candidate_count | int | Y | 카드 매칭 후보 건수 |
-| duplicate_group_id | str/null | N | 중복 의심 그룹 ID |
-| duplicate_candidate_ids | list[str] | Y | 중복 의심 후보 ID 목록 |
-| duplicate_reason | str/null | N | 중복 의심 사유 |
-| approval_number | str/null | N | 승인번호 |
-| export_included | bool | Y | 엑셀 정리내역 포함 여부 |
-| user_note | str/null | N | 사용자 메모 |
-| created_at | datetime | Y | 생성일시 |
-| ocr_provider | str/null | N | OCR provider 이름 |
-
----
-
-## 2.2 CardTransaction
-
-| 필드 | 타입 | 필수 | 설명 |
-|---|---|---:|---|
-| id | str | Y | 내부 고유 ID |
-| session_id | str/null | N | 처리 세션 ID |
-| source_file_id | str | Y | 원본 파일 ID |
-| source_file_name | str | Y | 카드내역 원본 파일명 |
-| stored_relative_path | str/null | N | 내부 저장 상대 경로 |
-| row_number | int | Y | 원본 행 번호 |
-| transaction_date | date/null | N | 카드 사용일 |
-| merchant_name | str/null | N | 가맹점명 |
-| total_amount | int/null | N | 사용금액 |
-| card_name | str/null | N | 카드명 |
-| approval_number | str/null | N | 승인번호 |
-| currency | str | Y | 통화 |
-| parse_status | str | Y | parsed, needs_review, failed |
-| warning_messages | list[str] | Y | 파싱 경고 목록 |
-| created_at | datetime | Y | 생성일시 |
-
----
-
-## 2.3 OCRResult
-
-| 필드 | 타입 | 필수 | 설명 |
-|---|---|---:|---|
-| id | str | Y | OCR 결과 ID |
-| source_file_id | str | Y | 원본 파일 ID |
-| source_file_name | str | Y | 원본 파일명 |
-| stored_relative_path | str/null | N | 내부 저장 상대 경로 |
-| provider | str | Y | mock, azure 등 |
-| raw_text | str | Y | OCR 원문 |
-| raw_json | dict/null | N | Provider 원본 응답 |
-| confidence | float/null | N | 전체 신뢰도 |
-| status | str | Y | completed, failed, skipped |
-| error_message | str/null | N | 오류 메시지 |
-| created_at | datetime | Y | 생성일시 |
-
----
-
-## 2.4 CardParseResult
-
-| 필드 | 타입 | 필수 | 설명 |
-|---|---|---:|---|
-| id | str | Y | 카드내역 파싱 결과 ID |
-| session_id | str/null | N | 처리 세션 ID |
-| source_file_id | str | Y | 원본 파일 ID |
-| source_file_name | str | Y | 카드내역 원본 파일명 |
-| total_rows | int | Y | 원본 전체 행 수 |
-| parsed_rows | int | Y | 파싱 성공 행 수 |
-| failed_rows | int | Y | 파싱 실패 행 수 |
-| transactions | list[CardTransaction] | Y | 파싱된 카드 사용내역 목록 |
-| missing_required_columns | list[str] | Y | 누락된 필수 컬럼 목록 |
-| warning_messages | list[str] | Y | 파싱 경고 목록 |
-| status | str | Y | completed, completed_with_warnings, failed |
-| created_at | datetime | Y | 생성일시 |
-
----
-
-## 3. Enum 정의
-
-### EvidenceType
+주요 필드:
 
 ```text
-receipt_image
-receipt_pdf
-ocr_text
-manual
+id
+session_id
+source_file_id
+ocr_result_id
+source_file_name
+stored_relative_path
+evidence_type
+transaction_date
+merchant_name
+business_number
+total_amount
+supply_amount
+vat_amount
+payment_method
+recommended_expense_category
+recommended_expense_category_reason
+expense_category
+review_status
+review_reason
+review_reasons
+card_match_status
+confidence
+parser_warnings
+validation_warnings
+validator_version
+matched_card_transaction_id
+card_match_score
+card_match_reason
+card_match_candidate_count
+duplicate_group_id
+duplicate_candidate_ids
+duplicate_reason
+approval_number
+export_included
+user_note
+created_at
+ocr_provider
 ```
 
-### ReviewStatus
+`recommended_expense_category`는 시스템 추천값입니다. `expense_category`는 사용자가 검수 화면에서 확인하거나 수정한 최종 입력값입니다. 엑셀의 비용항목별 요약은 `expense_category` 기준입니다.
+
+### OCRResult
+
+주요 필드:
 
 ```text
-pending
-needs_review
-approved
-rejected
-excluded
+id
+source_file_id
+source_file_name
+stored_relative_path
+provider
+raw_text
+raw_json
+confidence
+status
+diagnostic_code
+error_message
+created_at
 ```
 
-### CardMatchStatus
+`raw_text`와 `raw_json`은 파싱 내부 입력으로만 다루며, 전체 내용을 DB/엑셀/화면에 저장하거나 표시하지 않는 것을 원칙으로 합니다.
+
+### CardTransaction
+
+주요 필드:
 
 ```text
-matched
-candidate
-unmatched
-mismatch
-needs_review
+id
+session_id
+source_file_id
+source_file_name
+stored_relative_path
+row_number
+transaction_date
+merchant_name
+total_amount
+card_name
+approval_number
+currency
+parse_status
+warning_messages
+created_at
 ```
 
-### CardParseStatus
+카드번호 전체나 카드 사용내역 원문 전체는 저장/표시하지 않습니다.
+
+### CardParseResult
+
+주요 필드:
 
 ```text
-parsed
-needs_review
-failed
+id
+session_id
+source_file_id
+source_file_name
+total_rows
+parsed_rows
+failed_rows
+transactions
+missing_required_columns
+warning_messages
+status
+created_at
 ```
 
-### CardParseResultStatus
+## 3. Enum
 
 ```text
-completed
-completed_with_warnings
-failed
+OCRStatus: completed, failed, skipped
+OCRProviderName: mock, azure
+EvidenceType: receipt_image, receipt_pdf, ocr_text, manual
+ReviewStatus: pending, needs_review, approved, rejected, excluded
+CardMatchStatus: unmatched, matched, candidate, mismatch, needs_review
+CardParseStatus: parsed, needs_review, failed
+CardParseResultStatus: completed, completed_with_warnings, failed
 ```
 
-## 3.1 검수 UI 표시값 매핑
+## 4. 처리 이력 DB
 
-| 내부 상태 | UI 표시값 |
-|---|---|
-| approved | 확인완료 |
-| needs_review | 검토필요 |
-| pending | 검토필요 |
-| rejected | 제외 |
-| excluded | 제외 |
+SQLite를 사용하며 기본 경로는 `data/app.db`입니다. DB 파일은 Git에 올리지 않습니다.
 
-검수 화면의 `포함` 값이 꺼져 있거나 검수상태가 `제외`이면 내부 상태는 `excluded`가 되고, 해당 건은 `01_정리내역`에서 제외되며 `08_제외내역`에 기록됩니다.
-
-### RecommendedCategory
-
-초기 기본값:
+### processing_jobs
 
 ```text
-식대
-교통비
-접대비
-소모품비
-통신비
-광고선전비
-복리후생비
-기타
-미분류
+id
+session_id
+status
+created_at
+updated_at
+receipt_count
+card_transaction_count
+needs_review_count
+excluded_count
+total_amount
+export_file_name
+export_relative_path
+note
 ```
 
-`recommended_expense_category`는 시스템이 제안한 참고용 비용항목입니다. `expense_category`는 사용자가 검수 화면에서 확인하거나 수정한 최종 입력값이며, 엑셀의 비용항목별 집계는 `expense_category` 기준입니다. `expense_category`가 비어 있으면 `미확정`으로 집계합니다.
+### uploaded_files
 
----
+```text
+id
+job_id
+session_id
+original_file_name
+stored_file_name
+stored_relative_path
+file_extension
+file_size_bytes
+file_role
+created_at
+```
 
-## 4. 검증 규칙
+### receipt_records
 
-## 4.1 필수값 검증
+```text
+id
+job_id
+session_id
+source_file_id
+ocr_result_id
+source_file_name
+transaction_date
+merchant_name
+business_number
+total_amount
+supply_amount
+vat_amount
+payment_method
+recommended_expense_category
+expense_category
+review_status
+review_reasons_json
+validation_warnings_json
+parser_warnings_json
+card_match_status
+card_match_reason
+card_match_score
+duplicate_suspected
+memo
+created_at
+updated_at
+```
 
-| 조건 | 처리 |
-|---|---|
-| transaction_date 없음 | review_status = needs_review, reason = 날짜누락 |
-| merchant_name 없음 | review_status = needs_review, reason = 상호누락 |
-| total_amount 없음 또는 0 이하 | review_status = needs_review, reason = 금액누락 |
+### card_transactions
 
-## 4.2 금액 검증
+```text
+id
+job_id
+session_id
+source_file_id
+source_file_name
+transaction_date
+merchant_name
+total_amount
+card_name
+approval_number
+currency
+parse_status
+warning_messages_json
+created_at
+```
 
-| 조건 | 처리 |
-|---|---|
-| supply_amount + vat_amount != total_amount | 금액불일치 표시 |
-| vat_amount 없음 | 부가세미확인 표시 |
-| supply_amount 없음, total_amount 있음 | 공급가액미확인 표시 |
+### export_files
 
-주의:
-부가세를 임의 추정할 수는 있지만 추정값과 OCR 추출값을 구분해야 합니다.
+```text
+id
+job_id
+session_id
+export_file_name
+export_relative_path
+file_size_bytes
+created_at
+```
 
-## 4.3 중복 검증
+DB에는 OCR 원문 전체, raw JSON 전체, 카드 사용내역 원문 전체, 전체 로컬 절대경로를 저장하지 않습니다. Excel 파일 bytes는 DB에 저장하지 않고 `OUTPUT_DIR` 하위 파일로 저장한 뒤 상대경로만 저장합니다.
 
-중복 후보 기준:
-
-1. 거래일이 동일하거나 ±1일 이내
-2. 총액이 동일
-3. 상호명이 동일하거나 유사
-
-중복은 확정하지 않고 “중복의심”으로 표시합니다.
-
-## 4.4 카드내역 매칭
-
-| 조건 | 상태 |
-|---|---|
-| 날짜 동일, 금액 동일, 상호 유사 | 매칭완료 |
-| 날짜 ±1일, 금액 동일 | 후보있음 |
-| 매칭 후보 없음 | 미매칭 |
-
----
-
-## 5. Excel 산출물 명세
+## 5. Excel 산출물
 
 파일명:
 
@@ -258,101 +249,64 @@ failed
 receipt_summary_YYYYMMDD_HHMMSS.xlsx
 ```
 
-필수 시트:
+시트 구성:
 
-| 시트명 | 설명 |
+| 순서 | 의미 |
 |---|---|
-| 01_정리내역 | 최종 검수된 영수증 목록 |
-| 02_월별요약 | 월별 총액, 공급가액, 부가세 합계 |
-| 03_비용항목별요약 | 사용자가 검수한 최종 비용항목별 집계 |
-| 04_검토필요 | 오류, 누락, 중복, 미매칭 목록 |
-| 05_카드대조 | 카드 사용내역과 영수증 매칭 결과 |
-| 06_원본파일목록 | 원본 파일명, 내부추적ID, 처리상태 |
-| 07_처리로그 | 처리 단계, 상태, 짧은 메시지 |
-| 08_제외내역 | 검수 화면에서 제외한 영수증 목록 |
+| 01 | 정리내역 |
+| 02 | 월별요약 |
+| 03 | 비용항목별요약 |
+| 04 | 검토필요 |
+| 05 | 카드대조 |
+| 06 | 원본파일목록 |
+| 07 | 처리로그 |
+| 08 | 제외내역 |
 
-## 5.1 01_정리내역 컬럼
+`07` 시트는 OCR 원문 전체나 provider raw JSON 전체를 넣지 않고, 처리 단계와 상태, 짧은 메시지만 기록합니다.
 
-```text
-No
-사용일자
-상호
-사업자번호
-총액
-공급가액
-부가세
-결제수단
-시스템추천비용항목
-최종비용항목
-검수상태
-검토사유
-카드매칭상태
-카드매칭사유
-중복의심여부
-원본파일명
-비고
-```
+## 6. 검수 상태와 제외 처리
 
-주의:
-엑셀 파일에는 OCR 원문 전체와 Provider raw JSON 전체를 쓰지 않습니다. 개인정보 보호를 위해 처리 상태와 짧은 메시지만 `07_처리로그`에 기록합니다.
+- `needs_review`, `pending`은 검수 필요로 표시합니다.
+- `approved`는 확인완료로 표시할 수 있습니다.
+- `excluded` 또는 `export_included=False`는 정리내역에서 제외하고 제외내역 시트에 따로 기록합니다.
+- 제외 데이터는 삭제하지 않습니다.
 
-## 5.2 Excel 서식 규칙
+## 7. 처리 이력 화면
 
-| 항목 | 규칙 |
-|---|---|
-| 금액 | 천 단위 콤마, 숫자 형식 |
-| 날짜 | yyyy-mm-dd |
-| 헤더 | 고정 행, 굵게 |
-| 검토필요 | 별도 시트 분리 |
-| 합계 | 월별/항목별 합계 행 표시 |
-| 원본파일명 | 파일명만 표시, 전체 로컬 경로 표시 금지 |
+- 목록 화면은 최근 작업 50건을 최신순으로 표시합니다.
+- 상세 화면은 job 요약, ReceiptRecord 요약, CardTransaction 요약, ExportFile 목록을 읽기 전용으로 표시합니다.
+- 과거 엑셀 재다운로드는 기존 `OUTPUT_DIR` 하위 파일만 허용합니다.
+- 과거 작업 재검수와 엑셀 재생성은 구현하지 않습니다.
 
----
+## 8. 설정 화면
 
-## 6. OCR Provider 인터페이스
+설정 화면은 읽기 전용입니다.
 
-```python
-class OCRProvider:
-    def extract(self, file_path: str) -> OCRResult:
-        ...
-```
+표시 항목:
 
-필수 구현:
+- OCR provider와 Azure 설정 여부
+- 보관기간과 cleanup dry-run 기본값
+- 업로드/출력 저장소 파일 수와 용량
+- DB 접근 가능 여부, 처리 이력 건수, 최근 처리일시
+- 처리 이력 연결 상태
+- cleanup dry-run 요약
 
-| Provider | 목적 |
-|---|---|
-| MockOCRProvider | 테스트와 UI 개발용 |
-| AzureDocumentIntelligenceProvider | 실제 OCR API용 |
+표시하지 않는 항목:
 
-OpenAI API는 MVP 필수 의존성이 아닙니다. 나중에 애매한 건만 보정하는 LLMProvider로 분리합니다.
+- API key
+- endpoint 전체 URL
+- `.env` 내용
+- 전체 로컬 절대경로
+- 파일명 목록
+- OCR 원문 전체
+- raw JSON 전체
+- 카드 사용내역 원문 전체
 
----
+## 9. 보안/개인정보 기준
 
-## 7. LLMProvider 확장 지점
-
-초기에는 구현하지 않아도 됩니다.
-
-```python
-class LLMProvider:
-    def normalize_receipt(self, raw_text: str) -> dict:
-        ...
-```
-
-호출 조건:
-
-1. OCR confidence가 낮은 경우
-2. 필수 필드가 누락된 경우
-3. 비용항목 추천이 실패한 경우
-4. 사용자가 AI 보정 버튼을 누른 경우
-
----
-
-## 8. 보안/개인정보 기준
-
-1. 원본 파일 경로를 사용자에게 노출하지 않는다.
-2. OCR 원문을 로그에 남기지 않는다.
-3. API Key는 `.env`로 관리한다.
-4. 업로드 파일은 보관 기간을 둔다.
-5. 삭제 기능을 제공한다.
-6. 테스트 데이터에는 실제 개인정보를 넣지 않는다.
-7. 엑셀 파일에는 전체 로컬 경로를 넣지 않는다.
+1. 원본 파일 전체 경로를 화면, DB, 엑셀에 노출하지 않습니다.
+2. OCR 원문 전체를 로그, DB, 엑셀, 화면에 남기지 않습니다.
+3. Provider raw JSON 전체를 로그, DB, 엑셀, 화면에 남기지 않습니다.
+4. API key와 secret은 코드에 하드코딩하지 않습니다.
+5. `.env`, `data/uploads`, `data/outputs`, `output`, `data/app.db`, `*.db`는 Git에 올리지 않습니다.
+6. 테스트 데이터에는 실제 고객 파일이나 실제 민감정보를 넣지 않습니다.

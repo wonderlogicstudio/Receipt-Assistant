@@ -13,6 +13,11 @@ DEFAULT_OCR_PROVIDER = "mock"
 DEFAULT_AZURE_MODEL_ID = "prebuilt-receipt"
 DEFAULT_AZURE_API_VERSION = "2024-11-30"
 DEFAULT_OCR_REQUEST_TIMEOUT_SECONDS = 30
+DEFAULT_AZURE_OCR_DEFAULT_POLL_INTERVAL_SECONDS = 1
+DEFAULT_AZURE_OCR_MAX_POLL_INTERVAL_SECONDS = 10
+DEFAULT_AZURE_OCR_MAX_POLL_ATTEMPTS = 30
+DEFAULT_AZURE_OCR_MAX_RETRIES = 3
+DEFAULT_APP_DB_PATH = Path("data/app.db")
 DEFAULT_OUTPUT_ROOT = Path("data/outputs")
 DEFAULT_UPLOAD_RETENTION_DAYS = 7
 DEFAULT_OUTPUT_RETENTION_DAYS = 7
@@ -24,6 +29,7 @@ class AppConfig:
     upload_root: Path = Path("data/uploads")
     upload_relative_root: Path = Path("data/uploads")
     output_root: Path = DEFAULT_OUTPUT_ROOT
+    app_db_path: Path = DEFAULT_APP_DB_PATH
     max_upload_size_bytes: int = DEFAULT_MAX_UPLOAD_SIZE_BYTES
     allowed_upload_extensions: frozenset[str] = field(default_factory=lambda: DEFAULT_ALLOWED_UPLOAD_EXTENSIONS)
     upload_retention_days: int = DEFAULT_UPLOAD_RETENTION_DAYS
@@ -35,12 +41,17 @@ class AppConfig:
     azure_document_intelligence_model_id: str = DEFAULT_AZURE_MODEL_ID
     azure_document_intelligence_api_version: str = DEFAULT_AZURE_API_VERSION
     ocr_request_timeout_seconds: int = DEFAULT_OCR_REQUEST_TIMEOUT_SECONDS
+    azure_ocr_default_poll_interval_seconds: int = DEFAULT_AZURE_OCR_DEFAULT_POLL_INTERVAL_SECONDS
+    azure_ocr_max_poll_interval_seconds: int = DEFAULT_AZURE_OCR_MAX_POLL_INTERVAL_SECONDS
+    azure_ocr_max_poll_attempts: int = DEFAULT_AZURE_OCR_MAX_POLL_ATTEMPTS
+    azure_ocr_max_retries: int = DEFAULT_AZURE_OCR_MAX_RETRIES
 
 
 def get_config() -> AppConfig:
     load_dotenv(dotenv_path=Path.cwd() / ".env")
     upload_root = Path(os.getenv("UPLOAD_DIR") or os.getenv("RECEIPT_ASSISTANT_UPLOAD_ROOT", "data/uploads"))
     output_root = Path(os.getenv("OUTPUT_DIR", str(DEFAULT_OUTPUT_ROOT)))
+    app_db_path = Path(os.getenv("APP_DB_PATH", str(DEFAULT_APP_DB_PATH)))
     max_upload_size_bytes = int(
         os.getenv("RECEIPT_ASSISTANT_MAX_UPLOAD_SIZE_BYTES", str(DEFAULT_MAX_UPLOAD_SIZE_BYTES))
     )
@@ -50,6 +61,7 @@ def get_config() -> AppConfig:
         upload_root=upload_root,
         upload_relative_root=Path("data/uploads"),
         output_root=output_root,
+        app_db_path=app_db_path,
         max_upload_size_bytes=max_upload_size_bytes,
         upload_retention_days=_positive_int_env("UPLOAD_RETENTION_DAYS", DEFAULT_UPLOAD_RETENTION_DAYS),
         output_retention_days=_positive_int_env("OUTPUT_RETENTION_DAYS", DEFAULT_OUTPUT_RETENTION_DAYS),
@@ -68,6 +80,22 @@ def get_config() -> AppConfig:
         ).strip()
         or DEFAULT_AZURE_API_VERSION,
         ocr_request_timeout_seconds=timeout_seconds,
+        azure_ocr_default_poll_interval_seconds=_positive_int_env(
+            "AZURE_OCR_DEFAULT_POLL_INTERVAL_SECONDS",
+            DEFAULT_AZURE_OCR_DEFAULT_POLL_INTERVAL_SECONDS,
+        ),
+        azure_ocr_max_poll_interval_seconds=_positive_int_env(
+            "AZURE_OCR_MAX_POLL_INTERVAL_SECONDS",
+            DEFAULT_AZURE_OCR_MAX_POLL_INTERVAL_SECONDS,
+        ),
+        azure_ocr_max_poll_attempts=_positive_int_env(
+            "AZURE_OCR_MAX_POLL_ATTEMPTS",
+            DEFAULT_AZURE_OCR_MAX_POLL_ATTEMPTS,
+        ),
+        azure_ocr_max_retries=_positive_int_env(
+            "AZURE_OCR_MAX_RETRIES",
+            DEFAULT_AZURE_OCR_MAX_RETRIES,
+        ),
     )
 
 

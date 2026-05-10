@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import time
+import re
 from hashlib import sha256
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import requests
 
@@ -13,6 +14,11 @@ from app.core.exceptions import ConfigurationError
 from app.core.ocr_models import OCRResult
 from app.ocr.base import OCRInput, OCRProvider
 from app.storage.file_store import StoredFileMetadata
+
+
+RETRYABLE_HTTP_STATUS_CODES = {429, 500, 502, 503, 504}
+MIN_POLL_INTERVAL_SECONDS = 1.0
+_HTTP_DIAGNOSTIC_PATTERN = re.compile(r"(?P<stage>analyze|poll)_http_(?P<status>\d{3})")
 
 
 class AzureDocumentIntelligenceProvider(OCRProvider):
@@ -31,14 +37,25 @@ class AzureDocumentIntelligenceProvider(OCRProvider):
         config: AppConfig | None = None,
         *,
         session: requests.Session | None = None,
-        poll_interval_seconds: float = 0.5,
-        max_poll_attempts: int = 12,
+        poll_interval_seconds: float | None = None,
+        max_poll_attempts: int | None = None,
+        max_retries: int | None = None,
+        sleep_func: Callable[[float], None] | None = None,
     ) -> None:
         self.config = config or get_config()
         self._validate_config()
         self.session = session or requests.Session()
-        self.poll_interval_seconds = poll_interval_seconds
-        self.max_poll_attempts = max_poll_attempts
+        self.poll_interval_seconds = _positive_float(
+            poll_interval_seconds,
+            float(self.config.azure_ocr_default_poll_interval_seconds),
+        )
+        self.max_poll_interval_seconds = max(
+            MIN_POLL_INTERVAL_SECONDS,
+            float(self.config.azure_ocr_max_poll_interval_seconds),
+        )
+        self.max_poll_attempts = max_poll_attempts or self.config.azure_ocr_max_poll_attempts
+        self.max_retries = max_retries if max_retries is not None else self.config.azure_ocr_max_retries
+        self.sleep_func = sleep_func or time.sleep
 
     def extract(self, source: OCRInput) -> OCRResult:
         source_info = self._source_info(source)
@@ -54,22 +71,24 @@ class AzureDocumentIntelligenceProvider(OCRProvider):
             )
 
         if suffix not in self.ocr_extensions:
-            return self._failed(source_info, "지원하지 않는 OCR 파일 형식입니다.")
+            return self._failed(source_info, "지원하지 않는 OCR 파일 형식입니다.", "unsupported_file_type")
 
         path = source_info["file_path"]
         if not isinstance(path, Path) or not path.exists():
-            return self._failed(source_info, "OCR 대상 파일에 접근할 수 없습니다.")
+            return self._failed(source_info, "OCR 대상 파일에 접근할 수 없습니다.", "source_not_accessible")
 
         try:
             result_payload = self._analyze_file(path, suffix)
         except requests.Timeout:
-            return self._failed(source_info, "OCR 요청 시간이 초과되었습니다.")
-        except requests.RequestException:
-            return self._failed(source_info, "OCR 요청에 실패했습니다.")
+            return self._failed(source_info, "OCR 요청 시간이 초과되었습니다.", "timeout")
+        except requests.exceptions.ProxyError:
+            return self._failed(source_info, "OCR 요청에 실패했습니다.", "proxy_error")
+        except requests.RequestException as exc:
+            return self._failed(source_info, "OCR 요청에 실패했습니다.", _request_diagnostic_code(exc))
         except ValueError:
-            return self._failed(source_info, "OCR 응답을 해석할 수 없습니다.")
+            return self._failed(source_info, "OCR 응답을 해석할 수 없습니다.", "bad_response")
         except KeyError:
-            return self._failed(source_info, "OCR 응답 구조를 확인해야 합니다.")
+            return self._failed(source_info, "OCR 응답 구조를 확인해야 합니다.", "unexpected_response")
 
         sanitized = self._sanitize_result(result_payload)
         return OCRResult.completed(
@@ -88,14 +107,18 @@ class AzureDocumentIntelligenceProvider(OCRProvider):
             "Ocp-Apim-Subscription-Key": self.config.azure_document_intelligence_key or "",
             "Content-Type": self.content_types[suffix],
         }
-        response = self.session.post(
-            analyze_url,
-            headers=headers,
-            data=path.read_bytes(),
-            timeout=self.config.ocr_request_timeout_seconds,
+        data = path.read_bytes()
+        response = self._request_with_retries(
+            "analyze",
+            lambda: self.session.post(
+                analyze_url,
+                headers=headers,
+                data=data,
+                timeout=self.config.ocr_request_timeout_seconds,
+            ),
         )
         if response.status_code >= 400:
-            raise requests.RequestException("analyze request failed")
+            raise _http_error("analyze", response.status_code)
 
         operation_location = response.headers.get("Operation-Location")
         if not operation_location:
@@ -107,25 +130,56 @@ class AzureDocumentIntelligenceProvider(OCRProvider):
         headers = {"Ocp-Apim-Subscription-Key": self.config.azure_document_intelligence_key or ""}
         last_payload: dict[str, Any] | None = None
         for attempt in range(self.max_poll_attempts):
-            response = self.session.get(
-                operation_location,
-                headers=headers,
-                timeout=self.config.ocr_request_timeout_seconds,
+            response = self._request_with_retries(
+                "poll",
+                lambda: self.session.get(
+                    operation_location,
+                    headers=headers,
+                    timeout=self.config.ocr_request_timeout_seconds,
+                ),
             )
             if response.status_code >= 400:
-                raise requests.RequestException("analyze result request failed")
+                raise _http_error("poll", response.status_code)
             payload = response.json()
             last_payload = payload
             status = str(payload.get("status", "")).lower()
             if status == "succeeded":
                 return payload
-            if status == "failed":
-                raise requests.RequestException("analyze operation failed")
-            if attempt < self.max_poll_attempts - 1 and self.poll_interval_seconds > 0:
-                time.sleep(self.poll_interval_seconds)
+            if status in {"failed", "canceled"}:
+                raise requests.RequestException("operation_failed")
+            if attempt < self.max_poll_attempts - 1:
+                self._sleep(self._poll_wait_seconds(response))
         if last_payload is not None:
             raise requests.Timeout("analyze polling timed out")
         raise ValueError("empty analyze result")
+
+    def _request_with_retries(self, stage: str, request_func: Callable[[], requests.Response]) -> requests.Response:
+        response = request_func()
+        retries = 0
+        while response.status_code in RETRYABLE_HTTP_STATUS_CODES and retries < self.max_retries:
+            self._sleep(self._retry_wait_seconds(response, retries))
+            retries += 1
+            response = request_func()
+        return response
+
+    def _poll_wait_seconds(self, response: requests.Response) -> float:
+        retry_after = _retry_after_seconds(response)
+        if retry_after is not None:
+            return self._clamp_wait_seconds(retry_after)
+        return self._clamp_wait_seconds(self.poll_interval_seconds)
+
+    def _retry_wait_seconds(self, response: requests.Response, retry_index: int) -> float:
+        retry_after = _retry_after_seconds(response)
+        if retry_after is not None:
+            return self._clamp_wait_seconds(retry_after)
+        return self._clamp_wait_seconds(self.poll_interval_seconds * (2**retry_index))
+
+    def _clamp_wait_seconds(self, seconds: float) -> float:
+        return min(max(seconds, MIN_POLL_INTERVAL_SECONDS), self.max_poll_interval_seconds)
+
+    def _sleep(self, seconds: float) -> None:
+        if seconds > 0:
+            self.sleep_func(seconds)
 
     def _sanitize_result(self, payload: dict[str, Any]) -> dict[str, Any]:
         fields = self._document_fields(payload)
@@ -232,13 +286,14 @@ class AzureDocumentIntelligenceProvider(OCRProvider):
             "file_path": path,
         }
 
-    def _failed(self, source_info: dict[str, Any], message: str) -> OCRResult:
+    def _failed(self, source_info: dict[str, Any], message: str, diagnostic_code: str) -> OCRResult:
         return OCRResult.failed(
             source_file_id=source_info["source_file_id"],
             source_file_name=source_info["source_file_name"],
             stored_relative_path=source_info["stored_relative_path"],
             provider=self.provider_name,
             error_message=message,
+            diagnostic_code=diagnostic_code,
         )
 
     def _analyze_url(self) -> str:
@@ -264,3 +319,33 @@ def _average(values: list[float]) -> float | None:
     if not values:
         return None
     return sum(values) / len(values)
+
+
+def _request_diagnostic_code(exc: requests.RequestException) -> str:
+    message = str(exc)
+    if re_match := _HTTP_DIAGNOSTIC_PATTERN.fullmatch(message):
+        return f"{re_match.group('stage')}_http_{re_match.group('status')}"
+    if message in {"operation_failed"}:
+        return message
+    return "request_error"
+
+
+def _http_error(stage: str, status_code: int) -> requests.RequestException:
+    return requests.RequestException(f"{stage}_http_{status_code}")
+
+
+def _retry_after_seconds(response: requests.Response) -> float | None:
+    raw_value = response.headers.get("Retry-After")
+    if raw_value is None:
+        return None
+    try:
+        seconds = int(str(raw_value).strip())
+    except ValueError:
+        return None
+    return float(seconds) if seconds > 0 else None
+
+
+def _positive_float(value: float | None, default: float) -> float:
+    if value is None:
+        return max(default, MIN_POLL_INTERVAL_SECONDS)
+    return max(float(value), MIN_POLL_INTERVAL_SECONDS)

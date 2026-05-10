@@ -3,7 +3,7 @@ from __future__ import annotations
 from app.core.enums import CardMatchStatus, EvidenceType, OCRProviderName, OCRStatus, ReviewStatus
 from app.core.ocr_models import OCRResult
 from app.parser.normalizers import normalize_amount, normalize_business_number, normalize_date
-from app.parser.receipt_parser import ReceiptParser
+from app.parser.receipt_parser import ReceiptParser, is_valid_merchant_candidate
 
 
 SAMPLE_OCR_TEXT = "\n".join(
@@ -19,7 +19,11 @@ SAMPLE_OCR_TEXT = "\n".join(
 )
 
 
-def make_ocr_result(raw_text: str = SAMPLE_OCR_TEXT, status: str = OCRStatus.COMPLETED.value) -> OCRResult:
+def make_ocr_result(
+    raw_text: str = SAMPLE_OCR_TEXT,
+    status: str = OCRStatus.COMPLETED.value,
+    raw_json: dict[str, object] | None = None,
+) -> OCRResult:
     if status == OCRStatus.COMPLETED.value:
         return OCRResult.completed(
             source_file_id="source-file-1",
@@ -27,7 +31,7 @@ def make_ocr_result(raw_text: str = SAMPLE_OCR_TEXT, status: str = OCRStatus.COM
             stored_relative_path="data/uploads/session-1/sample_receipt.jpg",
             provider=OCRProviderName.MOCK.value,
             raw_text=raw_text,
-            raw_json={},
+            raw_json=raw_json or {},
             confidence=0.94,
         )
     return OCRResult.failed(
@@ -134,3 +138,167 @@ def test_receipt_record_does_not_store_raw_ocr_text():
     assert "raw_text" not in data
     assert "raw_json" not in data
     assert receipt.ocr_raw_text == ""
+
+
+def test_overlay_title_is_not_selected_as_merchant_name():
+    raw_text = "\n".join(
+        [
+            "슈퍼 마리오",
+            "거래일자: 2026.05.07",
+            "사업자번호: 123-45-67890",
+            "합계: 12,000원",
+        ]
+    )
+
+    receipt = ReceiptParser().parse(make_ocr_result(raw_text))
+
+    assert receipt.merchant_name is None
+    assert receipt.review_status == ReviewStatus.NEEDS_REVIEW.value
+    assert "merchant_name_missing_or_low_confidence" in receipt.parser_warnings
+
+
+def test_overlay_title_with_punctuation_is_not_selected_as_merchant_name():
+    raw_text = "\n".join(
+        [
+            "슈퍼 마리오!",
+            "거래일자: 2026.04.25",
+            "합계: 105,720원",
+        ]
+    )
+
+    receipt = ReceiptParser().parse(make_ocr_result(raw_text, raw_json={"MerchantName": "슈퍼 마리오!"}))
+
+    assert receipt.merchant_name is None
+    assert receipt.review_status == ReviewStatus.NEEDS_REVIEW.value
+    assert "merchant_name_missing_or_low_confidence" in receipt.parser_warnings
+
+
+def test_status_bar_text_is_skipped_and_receipt_merchant_candidate_is_used():
+    raw_text = "\n".join(
+        [
+            "KT 9:37",
+            "테스트카페",
+            "사업자번호: 123-45-67890",
+            "거래일자: 2026.05.07",
+            "합계: 12,000원",
+        ]
+    )
+
+    receipt = ReceiptParser().parse(make_ocr_result(raw_text))
+
+    assert receipt.merchant_name == "테스트카페"
+
+
+def test_business_number_dictionary_maps_merchant_name():
+    raw_text = "\n".join(
+        [
+            "슈퍼 마리오",
+            "사업자번호: 206-86-50913",
+            "거래일자: 2026.05.07",
+            "합계: 12,000원",
+        ]
+    )
+
+    receipt = ReceiptParser().parse(make_ocr_result(raw_text))
+
+    assert receipt.business_number == "206-86-50913"
+    assert receipt.merchant_name == "이마트 영등포점"
+
+
+def test_business_number_mapping_wins_when_receipt_name_is_present():
+    raw_text = "\n".join(
+        [
+            "이마트 영등포점",
+            "사업자번호: 206-86-50913",
+            "거래일자: 2026.05.07",
+            "합계: 12,000원",
+        ]
+    )
+
+    receipt = ReceiptParser().parse(make_ocr_result(raw_text))
+
+    assert receipt.merchant_name == "이마트 영등포점"
+
+
+def test_receipt_business_keyword_merchant_is_selected_without_business_number_mapping():
+    raw_text = "\n".join(
+        [
+            "이마트 영등포점 T: (02)3468-1234",
+            "서울특별시 영등포구 영중로 15",
+            "거래일자: 2026.02.16",
+            "합계: 35,700원",
+        ]
+    )
+
+    receipt = ReceiptParser().parse(make_ocr_result(raw_text))
+
+    assert receipt.merchant_name == "이마트 영등포점"
+
+
+def test_product_line_is_not_selected_as_merchant_name():
+    raw_text = "\n".join(
+        [
+            "미미 인어공주미미",
+            "사업자번호: 123-45-67890",
+            "거래일자: 2026.05.07",
+            "합계: 12,000원",
+        ]
+    )
+
+    receipt = ReceiptParser().parse(make_ocr_result(raw_text))
+
+    assert receipt.merchant_name is None
+    assert "merchant_name_missing_or_low_confidence" in receipt.parser_warnings
+
+
+def test_ai_robot_product_line_is_not_selected_as_merchant_name():
+    raw_text = "\n".join(
+        [
+            "AI 로봇 강아지 마일",
+            "거래일자: 2026.05.07",
+            "사업자번호: 123-45-67890",
+            "합계: 12,000원",
+        ]
+    )
+
+    receipt = ReceiptParser().parse(make_ocr_result(raw_text))
+
+    assert receipt.merchant_name is None
+
+
+def test_raw_json_merchant_name_has_priority_over_raw_text():
+    raw_text = "\n".join(
+        [
+            "슈퍼 마리오",
+            "테스트카페",
+            "거래일자: 2026.05.07",
+            "사업자번호: 123-45-67890",
+            "합계: 12,000원",
+        ]
+    )
+
+    receipt = ReceiptParser().parse(make_ocr_result(raw_text, raw_json={"MerchantName": "원본상호"}))
+
+    assert receipt.merchant_name == "원본상호"
+
+
+def test_raw_json_overlay_merchant_name_is_ignored():
+    raw_text = "\n".join(
+        [
+            "거래일자: 2026.05.07",
+            "사업자번호: 123-45-67890",
+            "합계: 12,000원",
+        ]
+    )
+
+    receipt = ReceiptParser().parse(make_ocr_result(raw_text, raw_json={"MerchantName": "슈퍼 마리오"}))
+
+    assert receipt.merchant_name is None
+    assert receipt.review_status == ReviewStatus.NEEDS_REVIEW.value
+
+
+def test_app_overlay_titles_are_not_valid_merchant_candidates():
+    assert is_valid_merchant_candidate("카카오톡") is False
+    assert is_valid_merchant_candidate("갤러리") is False
+    assert is_valid_merchant_candidate("Samsung") is False
+    assert is_valid_merchant_candidate("iPhone") is False

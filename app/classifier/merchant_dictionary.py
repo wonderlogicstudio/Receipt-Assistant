@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 
 MERCHANT_CATEGORY_RULES: list[dict[str, object]] = [
     {
@@ -30,3 +32,30 @@ MERCHANT_CATEGORY_RULES: list[dict[str, object]] = [
 
 
 UNCATEGORIZED = "미분류"
+
+
+MERCHANT_BY_BUSINESS_NUMBER = {
+    "206-86-50913": "이마트 영등포점",
+}
+
+
+def merchant_name_for_business_number(business_number: str | None) -> str | None:
+    if not business_number:
+        return None
+    return MERCHANT_BY_BUSINESS_NUMBER.get(business_number)
+
+
+def find_merchant_by_business_number(business_number: str | None) -> str | None:
+    normalized = _normalize_business_number_for_lookup(business_number)
+    if not normalized:
+        return None
+    return merchant_name_for_business_number(normalized)
+
+
+def _normalize_business_number_for_lookup(value: str | None) -> str | None:
+    if not value:
+        return None
+    digits = re.sub(r"\D", "", str(value))
+    if len(digits) != 10:
+        return None
+    return f"{digits[:3]}-{digits[3:5]}-{digits[5:]}"
