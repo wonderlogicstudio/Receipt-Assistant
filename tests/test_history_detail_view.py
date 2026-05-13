@@ -40,8 +40,23 @@ def sample_job_detail():
                 "transaction_date": "2026-05-10",
                 "merchant_name": "테스트상호",
                 "total_amount": 141420,
+                "gross_amount": 150000,
+                "discount_amount": 8580,
+                "final_amount": 141420,
+                "paid_amount": 141420,
+                "amount_source": "paid_amount",
+                "amount_warnings_json": '["discount_detected"]',
                 "supply_amount": 128563,
                 "vat_amount": 12857,
+                "estimated_supply_amount": None,
+                "estimated_vat_amount": None,
+                "vat_source": "explicit",
+                "vat_note": "영수증에 부가세가 명시되어 있음",
+                "vat_warnings_json": "[]",
+                "vat_review_required": 0,
+                "sensitive_text_detected": 1,
+                "sensitive_text_categories_json": '["wifi_password"]',
+                "sensitive_warnings_json": '["wifi_password_detected"]',
                 "expense_category": "사무용품비",
                 "recommended_expense_category": "사무용품비",
                 "review_status": "needs_review",
@@ -94,12 +109,58 @@ def test_receipt_records_to_history_detail_dataframe_hides_internal_fields():
 
     assert list(dataframe.columns) == RECEIPT_DETAIL_COLUMNS
     assert dataframe.loc[0, "원본파일명"] == "receipt.jpg"
+    assert dataframe.loc[0, "할인전금액"] == "150,000"
+    assert dataframe.loc[0, "할인금액"] == "8,580"
+    assert dataframe.loc[0, "최종결제금액"] == "141,420"
+    assert dataframe.loc[0, "실제결제금액"] == "141,420"
+    assert dataframe.loc[0, "금액판단기준"] == "paid_amount"
+    assert dataframe.loc[0, "금액검토사유"] == "discount_detected"
+    assert dataframe.loc[0, "추정공급가액"] == "-"
+    assert dataframe.loc[0, "추정부가세"] == "-"
+    assert dataframe.loc[0, "부가세출처"] == "explicit"
+    assert dataframe.loc[0, "부가세검토사유"] == "영수증에 부가세가 명시되어 있음"
+    assert dataframe.loc[0, "민감문구감지"] == "Y"
+    assert dataframe.loc[0, "민감문구유형"] == "wifi_password"
     serialized = dataframe.to_string()
     assert "C:" not in serialized
     assert "private" not in serialized
     assert "stored_relative_path" not in serialized
     assert "raw_text" not in serialized
     assert "raw_json" not in serialized
+    assert "sample-password-1234" not in serialized
+
+
+def test_discount_zero_payment_pipeline_trace_history_detail_preserves_amount_state_without_raw_values():
+    row = {
+        **sample_job_detail()["receipt_records"][0],
+        "total_amount": 0,
+        "gross_amount": 10800,
+        "discount_amount": 10800,
+        "final_amount": 0,
+        "paid_amount": 0,
+        "amount_source": "paid_amount",
+        "amount_warnings_json": '["discount_detected", "zero_payment_after_discount"]',
+        "source_file_name": r"C:\private\sample_receipt.jpg",
+        "stored_relative_path": r"C:\private\data\uploads\sample_receipt.jpg",
+        "raw_text": "RAW_TRACE_TEXT_SHOULD_NOT_APPEAR",
+        "raw_json": "RAW_TRACE_JSON_SHOULD_NOT_APPEAR",
+    }
+
+    dataframe = receipt_records_to_history_detail_dataframe([row])
+    serialized = dataframe.to_string()
+
+    assert dataframe.loc[0, "총금액"] == "0"
+    assert dataframe.loc[0, "할인전금액"] == "10,800"
+    assert dataframe.loc[0, "할인금액"] == "10,800"
+    assert dataframe.loc[0, "최종결제금액"] == "0"
+    assert dataframe.loc[0, "실제결제금액"] == "0"
+    assert dataframe.loc[0, "금액판단기준"] == "paid_amount"
+    assert "zero_payment_after_discount" in dataframe.loc[0, "금액검토사유"]
+    assert dataframe.loc[0, "원본파일명"] == "sample_receipt.jpg"
+    assert "C:" not in serialized
+    assert "private" not in serialized
+    assert "RAW_TRACE_TEXT_SHOULD_NOT_APPEAR" not in serialized
+    assert "RAW_TRACE_JSON_SHOULD_NOT_APPEAR" not in serialized
 
 
 def test_card_transactions_to_history_detail_dataframe_hides_internal_fields():

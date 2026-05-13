@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, is_dataclass
 from datetime import datetime
+import json
 from pathlib import Path
 from typing import Iterable
 
@@ -36,8 +37,20 @@ RECEIPT_DETAIL_COLUMNS = [
     "사용일자",
     "상호",
     "총금액",
+    "할인전금액",
+    "할인금액",
+    "최종결제금액",
+    "실제결제금액",
+    "금액판단기준",
+    "금액검토사유",
     "공급가액",
     "부가세",
+    "추정공급가액",
+    "추정부가세",
+    "부가세출처",
+    "부가세검토사유",
+    "민감문구감지",
+    "민감문구유형",
     "최종비용항목",
     "추천비용항목",
     "검수상태",
@@ -148,8 +161,20 @@ def receipt_records_to_history_detail_dataframe(receipt_records: Iterable[object
                 "사용일자": _date_display(row.get("transaction_date")),
                 "상호": row.get("merchant_name") or "-",
                 "총금액": format_amount(row.get("total_amount")),
+                "할인전금액": format_amount(row.get("gross_amount")),
+                "할인금액": format_amount(row.get("discount_amount")),
+                "최종결제금액": format_amount(row.get("final_amount")),
+                "실제결제금액": format_amount(row.get("paid_amount")),
+                "금액판단기준": row.get("amount_source") or "-",
+                "금액검토사유": _json_list_display(row.get("amount_warnings_json")) or "-",
                 "공급가액": format_amount(row.get("supply_amount")),
                 "부가세": format_amount(row.get("vat_amount")),
+                "추정공급가액": format_amount(row.get("estimated_supply_amount")),
+                "추정부가세": format_amount(row.get("estimated_vat_amount")),
+                "부가세출처": row.get("vat_source") or "-",
+                "부가세검토사유": _vat_reason_display(row),
+                "민감문구감지": "Y" if _safe_int(row.get("sensitive_text_detected")) else "-",
+                "민감문구유형": _json_list_display(row.get("sensitive_text_categories_json")) or "-",
                 "최종비용항목": row.get("expense_category") or "-",
                 "추천비용항목": row.get("recommended_expense_category") or "-",
                 "검수상태": row.get("review_status") or "-",
@@ -292,6 +317,36 @@ def _review_reason_display(row: dict[str, object]) -> str:
             text = str(value).strip()
             return text if text else "-"
     return row.get("review_reason") or "-"
+
+
+def _json_list_display(value: object) -> str | None:
+    if value in {None, ""}:
+        return None
+    if isinstance(value, list):
+        values = [str(item).strip() for item in value if str(item).strip()]
+        return "; ".join(values) if values else None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return text
+    if isinstance(parsed, list):
+        values = [str(item).strip() for item in parsed if str(item).strip()]
+        return "; ".join(values) if values else None
+    return text
+
+
+def _vat_reason_display(row: dict[str, object]) -> str:
+    values: list[str] = []
+    warnings = _json_list_display(row.get("vat_warnings_json"))
+    if warnings:
+        values.append(warnings)
+    note = row.get("vat_note")
+    if note:
+        values.append(str(note).strip())
+    return "; ".join(value for value in values if value) or "-"
 
 
 def _mask_long_number(value: object) -> str | None:

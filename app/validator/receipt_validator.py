@@ -59,8 +59,31 @@ class ReceiptValidator:
             reasons.append("날짜누락")
         if not _has_text(receipt.merchant_name):
             reasons.append("상호누락")
-        if receipt.total_amount is None or receipt.total_amount <= 0:
+        if receipt.total_amount is None:
             reasons.append("금액누락")
+        if receipt.total_amount == 0 and (receipt.discount_amount or 0) > 0:
+            reasons.append("zero_payment_after_discount")
+        if receipt.sensitive_text_detected:
+            reasons.append("sensitive_text_redacted")
+        if (
+            receipt.gross_amount is not None
+            and receipt.discount_amount is not None
+            and receipt.discount_amount > receipt.gross_amount + self.amount_tolerance
+        ):
+            reasons.append("discount_amount_suspicious")
+        if (
+            receipt.gross_amount is not None
+            and receipt.discount_amount is not None
+            and receipt.final_amount is not None
+            and abs((receipt.gross_amount - receipt.discount_amount) - receipt.final_amount) > self.amount_tolerance
+        ):
+            reasons.append("amount_mismatch_after_discount")
+        if (
+            receipt.paid_amount is not None
+            and receipt.final_amount is not None
+            and abs(receipt.paid_amount - receipt.final_amount) > self.amount_tolerance
+        ):
+            reasons.append("paid_amount_mismatch")
 
         if (
             receipt.supply_amount is not None
@@ -69,8 +92,11 @@ class ReceiptValidator:
             and abs((receipt.supply_amount + receipt.vat_amount) - receipt.total_amount) > self.amount_tolerance
         ):
             reasons.append("금액불일치")
+            reasons.append("vat_amount_mismatch")
 
-        if receipt.vat_amount is None:
+        if receipt.vat_source == "estimated_reference":
+            reasons.append("vat_estimated_reference_only")
+        elif receipt.vat_amount is None and receipt.vat_source not in {"zero_amount", "not_applicable"}:
             reasons.append("부가세미확인")
 
         if receipt.business_number and not BUSINESS_NUMBER_PATTERN.fullmatch(receipt.business_number):
@@ -88,6 +114,22 @@ class ReceiptValidator:
             warnings.append("사업자번호미확인")
         if not _has_text(receipt.payment_method):
             warnings.append("결제수단미확인")
+        warnings.extend(receipt.amount_warnings)
+        warnings.extend(receipt.vat_warnings)
+        warnings.extend(receipt.sensitive_warnings)
+        if (
+            receipt.gross_amount is not None
+            and receipt.discount_amount is not None
+            and receipt.discount_amount > receipt.gross_amount + self.amount_tolerance
+        ):
+            warnings.append("discount_amount_suspicious")
+        if (
+            receipt.estimated_supply_amount is not None
+            and receipt.estimated_vat_amount is not None
+            and receipt.total_amount is not None
+            and receipt.estimated_supply_amount + receipt.estimated_vat_amount != receipt.total_amount
+        ):
+            warnings.append("vat_amount_mismatch")
 
         return _unique(warnings)
 

@@ -23,7 +23,26 @@ def make_service(tmp_path: Path) -> JobHistoryService:
     return JobHistoryService(repository=repository, config=config)
 
 
-def make_receipt(*, review_status: str = ReviewStatus.NEEDS_REVIEW.value, amount: int = 12000) -> ReceiptRecord:
+def make_receipt(
+    *,
+    review_status: str = ReviewStatus.NEEDS_REVIEW.value,
+    amount: int = 12000,
+    gross_amount: int | None = None,
+    discount_amount: int | None = None,
+    final_amount: int | None = None,
+    paid_amount: int | None = None,
+    amount_source: str | None = None,
+    amount_warnings: list[str] | None = None,
+    estimated_supply_amount: int | None = None,
+    estimated_vat_amount: int | None = None,
+    vat_source: str | None = None,
+    vat_note: str | None = None,
+    vat_warnings: list[str] | None = None,
+    vat_review_required: bool = False,
+    sensitive_text_detected: bool = False,
+    sensitive_text_categories: list[str] | None = None,
+    sensitive_warnings: list[str] | None = None,
+) -> ReceiptRecord:
     return ReceiptRecord.create(
         session_id="session-a",
         source_file_id="source-a",
@@ -47,6 +66,21 @@ def make_receipt(*, review_status: str = ReviewStatus.NEEDS_REVIEW.value, amount
         review_reasons=["사용자 확인 필요"],
         recommended_expense_category="사무용품비",
         validation_warnings=["금액 확인"],
+        gross_amount=gross_amount,
+        discount_amount=discount_amount,
+        final_amount=final_amount,
+        paid_amount=paid_amount,
+        amount_source=amount_source,
+        amount_warnings=amount_warnings or [],
+        estimated_supply_amount=estimated_supply_amount,
+        estimated_vat_amount=estimated_vat_amount,
+        vat_source=vat_source,
+        vat_note=vat_note,
+        vat_warnings=vat_warnings or [],
+        vat_review_required=vat_review_required,
+        sensitive_text_detected=sensitive_text_detected,
+        sensitive_text_categories=sensitive_text_categories or [],
+        sensitive_warnings=sensitive_warnings or [],
     )
 
 
@@ -124,6 +158,129 @@ def test_service_lists_jobs_and_returns_detail(tmp_path):
     assert len(detail["card_transactions"]) == 1
     assert detail["export_files"] == []
     assert service.get_processing_job_detail("missing") is None
+
+
+def test_service_stores_and_reads_discount_amount_fields(tmp_path):
+    service = make_service(tmp_path)
+
+    job = service.save_job_result(
+        session_id="session-a",
+        receipt_records=[
+            make_receipt(
+                amount=0,
+                gross_amount=10800,
+                discount_amount=10800,
+                final_amount=0,
+                paid_amount=0,
+                amount_source="paid_amount",
+                amount_warnings=["discount_detected", "zero_payment_after_discount"],
+            )
+        ],
+        card_transactions=[],
+    )
+
+    detail = service.get_processing_job_detail(str(job["id"]))
+    receipt = detail["receipt_records"][0]
+
+    assert job["total_amount"] == 0
+    assert receipt["total_amount"] == 0
+    assert receipt["gross_amount"] == 10800
+    assert receipt["discount_amount"] == 10800
+    assert receipt["final_amount"] == 0
+    assert receipt["paid_amount"] == 0
+    assert receipt["amount_source"] == "paid_amount"
+    assert json.loads(receipt["amount_warnings_json"]) == ["discount_detected", "zero_payment_after_discount"]
+
+
+def test_discount_zero_payment_pipeline_trace_job_history_preserves_amount_state(tmp_path):
+    service = make_service(tmp_path)
+
+    job = service.save_job_result(
+        session_id="session-a",
+        receipt_records=[
+            make_receipt(
+                amount=0,
+                gross_amount=10800,
+                discount_amount=10800,
+                final_amount=0,
+                paid_amount=0,
+                amount_source="paid_amount",
+                amount_warnings=["discount_detected", "zero_payment_after_discount"],
+            )
+        ],
+        card_transactions=[],
+    )
+    detail = service.get_processing_job_detail(str(job["id"]))
+    receipt = detail["receipt_records"][0]
+
+    assert job["total_amount"] == 0
+    assert receipt["gross_amount"] == 10800
+    assert receipt["discount_amount"] == 10800
+    assert receipt["final_amount"] == 0
+    assert receipt["paid_amount"] == 0
+    assert receipt["total_amount"] == 0
+    assert receipt["amount_source"] == "paid_amount"
+    assert "zero_payment_after_discount" in json.loads(receipt["amount_warnings_json"])
+
+
+def test_service_stores_and_reads_estimated_vat_fields(tmp_path):
+    service = make_service(tmp_path)
+
+    job = service.save_job_result(
+        session_id="session-a",
+        receipt_records=[
+            make_receipt(
+                amount=5100,
+                estimated_supply_amount=4636,
+                estimated_vat_amount=464,
+                vat_source="estimated_reference",
+                vat_note="부가세 미표기, 참고용 역산값",
+                vat_warnings=["vat_not_explicit", "vat_estimated_reference_only"],
+                vat_review_required=True,
+            )
+        ],
+        card_transactions=[],
+    )
+
+    detail = service.get_processing_job_detail(str(job["id"]))
+    receipt = detail["receipt_records"][0]
+
+    assert receipt["estimated_supply_amount"] == 4636
+    assert receipt["estimated_vat_amount"] == 464
+    assert receipt["vat_source"] == "estimated_reference"
+    assert receipt["vat_note"] == "부가세 미표기, 참고용 역산값"
+    assert json.loads(receipt["vat_warnings_json"]) == ["vat_not_explicit", "vat_estimated_reference_only"]
+    assert receipt["vat_review_required"] == 1
+
+
+def test_service_stores_sensitive_categories_without_raw_values(tmp_path):
+    service = make_service(tmp_path)
+    marker = "sample-password-1234"
+
+    job = service.save_job_result(
+        session_id="session-a",
+        receipt_records=[
+            {
+                **make_receipt(
+                    sensitive_text_detected=True,
+                    sensitive_text_categories=["wifi_password"],
+                    sensitive_warnings=["wifi_password_detected"],
+                ).to_dict(),
+                "raw_sensitive_value": marker,
+            }
+        ],
+        card_transactions=[],
+    )
+
+    detail = service.get_processing_job_detail(str(job["id"]))
+    receipt = detail["receipt_records"][0]
+    with sqlite3.connect(tmp_path / "history.db") as connection:
+        serialized = "\n".join(str(value) for row in connection.execute("SELECT * FROM receipt_records").fetchall() for value in row if value is not None)
+
+    assert receipt["sensitive_text_detected"] == 1
+    assert json.loads(receipt["sensitive_text_categories_json"]) == ["wifi_password"]
+    assert json.loads(receipt["sensitive_warnings_json"]) == ["wifi_password_detected"]
+    assert marker not in serialized
 
 
 def test_service_saves_export_bytes_to_file_and_relative_path_only(tmp_path):

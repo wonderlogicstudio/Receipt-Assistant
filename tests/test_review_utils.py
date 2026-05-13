@@ -8,14 +8,26 @@ from app.core.receipt_models import ReceiptRecord
 from app.ui.review_utils import (
     COL_CARD_MATCH_STATUS,
     COL_DATE,
+    COL_DISCOUNT_AMOUNT,
+    COL_ESTIMATED_SUPPLY,
+    COL_ESTIMATED_VAT,
     COL_EXPENSE_CATEGORY,
+    COL_FINAL_AMOUNT,
+    COL_GROSS_AMOUNT,
+    COL_AMOUNT_SOURCE,
+    COL_AMOUNT_WARNINGS,
     COL_MERCHANT,
+    COL_PAID_AMOUNT,
     COL_RECOMMENDED_CATEGORY,
     COL_REVIEW_REASON,
     COL_REVIEW_STATUS,
+    COL_SENSITIVE_CATEGORIES,
+    COL_SENSITIVE_DETECTED,
     COL_SOURCE_FILE_NAME,
     COL_TOTAL,
     COL_VAT,
+    COL_VAT_SOURCE,
+    COL_VAT_WARNINGS,
     INTERNAL_OCR_RESULT_ID,
     INTERNAL_RECEIPT_ID,
     INTERNAL_SOURCE_FILE_ID,
@@ -38,6 +50,21 @@ def make_receipt(
     card_match_status: str = CardMatchStatus.UNMATCHED.value,
     duplicate_reason: str | None = None,
     export_included: bool = True,
+    gross_amount: int | None = None,
+    discount_amount: int | None = None,
+    final_amount: int | None = None,
+    paid_amount: int | None = None,
+    amount_source: str | None = None,
+    amount_warnings: list[str] | None = None,
+    estimated_supply_amount: int | None = None,
+    estimated_vat_amount: int | None = None,
+    vat_source: str | None = None,
+    vat_note: str | None = None,
+    vat_warnings: list[str] | None = None,
+    vat_review_required: bool = False,
+    sensitive_text_detected: bool = False,
+    sensitive_text_categories: list[str] | None = None,
+    sensitive_warnings: list[str] | None = None,
 ) -> ReceiptRecord:
     return ReceiptRecord.create(
         session_id="session-1",
@@ -66,6 +93,21 @@ def make_receipt(
         card_match_reason="no_candidate",
         duplicate_reason=duplicate_reason,
         export_included=export_included,
+        gross_amount=gross_amount,
+        discount_amount=discount_amount,
+        final_amount=final_amount,
+        paid_amount=paid_amount,
+        amount_source=amount_source,
+        amount_warnings=amount_warnings or [],
+        estimated_supply_amount=estimated_supply_amount,
+        estimated_vat_amount=estimated_vat_amount,
+        vat_source=vat_source,
+        vat_note=vat_note,
+        vat_warnings=vat_warnings or [],
+        vat_review_required=vat_review_required,
+        sensitive_text_detected=sensitive_text_detected,
+        sensitive_text_categories=sensitive_text_categories or [],
+        sensitive_warnings=sensitive_warnings or [],
     )
 
 
@@ -83,7 +125,19 @@ def test_review_dataframe_contains_required_display_columns():
         COL_DATE,
         COL_MERCHANT,
         COL_TOTAL,
+        COL_GROSS_AMOUNT,
+        COL_DISCOUNT_AMOUNT,
+        COL_FINAL_AMOUNT,
+        COL_PAID_AMOUNT,
+        COL_AMOUNT_SOURCE,
+        COL_AMOUNT_WARNINGS,
         COL_VAT,
+        COL_ESTIMATED_SUPPLY,
+        COL_ESTIMATED_VAT,
+        COL_VAT_SOURCE,
+        COL_VAT_WARNINGS,
+        COL_SENSITIVE_DETECTED,
+        COL_SENSITIVE_CATEGORIES,
         COL_RECOMMENDED_CATEGORY,
         COL_EXPENSE_CATEGORY,
         COL_REVIEW_STATUS,
@@ -92,6 +146,93 @@ def test_review_dataframe_contains_required_display_columns():
         COL_SOURCE_FILE_NAME,
     }
     assert expected_columns.issubset(set(dataframe.columns))
+
+
+def test_review_dataframe_shows_discount_amount_fields_as_read_only_context():
+    dataframe = receipt_records_to_review_dataframe(
+        [
+            make_receipt(
+                total_amount=0,
+                gross_amount=10800,
+                discount_amount=10800,
+                final_amount=0,
+                paid_amount=0,
+                amount_source="paid_amount",
+                amount_warnings=["discount_detected", "zero_payment_after_discount"],
+            )
+        ]
+    )
+
+    assert dataframe.loc[0, COL_TOTAL] == 0
+    assert dataframe.loc[0, COL_GROSS_AMOUNT] == 10800
+    assert dataframe.loc[0, COL_DISCOUNT_AMOUNT] == 10800
+    assert dataframe.loc[0, COL_FINAL_AMOUNT] == 0
+    assert dataframe.loc[0, COL_PAID_AMOUNT] == 0
+    assert dataframe.loc[0, COL_AMOUNT_SOURCE] == "paid_amount"
+    assert "zero_payment_after_discount" in dataframe.loc[0, COL_AMOUNT_WARNINGS]
+
+
+def test_discount_zero_payment_pipeline_trace_review_dataframe_preserves_amount_state():
+    dataframe = receipt_records_to_review_dataframe(
+        [
+            make_receipt(
+                total_amount=0,
+                gross_amount=10800,
+                discount_amount=10800,
+                final_amount=0,
+                paid_amount=0,
+                amount_source="paid_amount",
+                amount_warnings=["discount_detected", "zero_payment_after_discount"],
+            )
+        ]
+    )
+
+    row = dataframe.loc[0]
+
+    assert row[COL_TOTAL] == 0
+    assert row[COL_GROSS_AMOUNT] == 10800
+    assert row[COL_DISCOUNT_AMOUNT] == 10800
+    assert row[COL_FINAL_AMOUNT] == 0
+    assert row[COL_PAID_AMOUNT] == 0
+    assert row[COL_AMOUNT_SOURCE] == "paid_amount"
+    assert "discount_detected" in row[COL_AMOUNT_WARNINGS]
+    assert "zero_payment_after_discount" in row[COL_AMOUNT_WARNINGS]
+
+
+def test_review_dataframe_shows_estimated_vat_fields_as_read_only_context():
+    dataframe = receipt_records_to_review_dataframe(
+        [
+            make_receipt(
+                total_amount=5100,
+                estimated_supply_amount=4636,
+                estimated_vat_amount=464,
+                vat_source="estimated_reference",
+                vat_note="부가세 미표기, 참고용 역산값",
+                vat_warnings=["vat_not_explicit", "vat_estimated_reference_only"],
+                vat_review_required=True,
+            )
+        ]
+    )
+
+    assert dataframe.loc[0, COL_ESTIMATED_SUPPLY] == 4636
+    assert dataframe.loc[0, COL_ESTIMATED_VAT] == 464
+    assert dataframe.loc[0, COL_VAT_SOURCE] == "estimated_reference"
+    assert "vat_estimated_reference_only" in dataframe.loc[0, COL_VAT_WARNINGS]
+
+
+def test_review_dataframe_shows_sensitive_categories_without_values():
+    dataframe = receipt_records_to_review_dataframe(
+        [
+            make_receipt(
+                sensitive_text_detected=True,
+                sensitive_text_categories=["wifi_password"],
+                sensitive_warnings=["wifi_password_detected"],
+            )
+        ]
+    )
+
+    assert bool(dataframe.loc[0, COL_SENSITIVE_DETECTED]) is True
+    assert dataframe.loc[0, COL_SENSITIVE_CATEGORIES] == "wifi_password"
 
 
 def test_map_review_status_to_label_maps_approved():

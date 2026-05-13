@@ -1,6 +1,7 @@
 from dataclasses import replace
 
 from app.core.enums import ReviewStatus
+from app.core.ocr_models import OCRResult
 from app.ocr.mock_provider import MockOCRProvider
 from app.parser.receipt_parser import ReceiptParser
 from app.validator.receipt_validator import ReceiptValidator
@@ -36,8 +37,123 @@ def test_missing_total_amount_needs_review(tmp_path):
 def test_zero_total_amount_needs_review(tmp_path):
     validated = ReceiptValidator().validate(replace(make_receipt(tmp_path), total_amount=0))
 
+    assert "금액누락" not in validated.review_reasons
+
+
+def test_zero_total_amount_after_discount_needs_review_without_missing_amount(tmp_path):
+    validated = ReceiptValidator().validate(
+        replace(
+            make_receipt(tmp_path),
+            total_amount=0,
+            gross_amount=10800,
+            discount_amount=10800,
+            final_amount=0,
+            paid_amount=0,
+            amount_warnings=["discount_detected", "zero_payment_after_discount"],
+        )
+    )
+
     assert validated.review_status == ReviewStatus.NEEDS_REVIEW.value
-    assert "금액누락" in validated.review_reasons
+    assert "금액누락" not in validated.review_reasons
+    assert "zero_payment_after_discount" in validated.review_reasons
+    assert "zero_payment_after_discount" in validated.validation_warnings
+
+
+def test_inferred_discount_warning_is_preserved(tmp_path):
+    validated = ReceiptValidator().validate(
+        replace(
+            make_receipt(tmp_path),
+            total_amount=0,
+            gross_amount=10800,
+            discount_amount=10800,
+            final_amount=0,
+            paid_amount=0,
+            amount_warnings=[
+                "discount_inferred_from_zero_payment",
+                "zero_payment_after_discount",
+            ],
+        )
+    )
+
+    assert validated.review_status == ReviewStatus.NEEDS_REVIEW.value
+    assert "discount_inferred_from_zero_payment" in validated.validation_warnings
+    assert "zero_payment_after_discount" in validated.review_reasons
+
+
+def test_discount_zero_payment_pipeline_trace_validator_preserves_amount_state():
+    raw_text = "\n".join(
+        [
+            "제품명",
+            "(할인내역)        수량        금액",
+            "                  (할인금액)",
+            "레디팩(아몬드봉봉)          10,800",
+            "KT 멤버십 VVIP 초이스      -10,800",
+            ">>드라이아이스(분) 10       0",
+            "총매출액                  10,800",
+            "할인금액                  10,800",
+            "합계금액                  0",
+            "받은금액                  0",
+        ]
+    )
+    ocr_result = OCRResult.completed(
+        source_file_id="source-file-1",
+        source_file_name="sample_receipt.jpg",
+        stored_relative_path="data/uploads/session-1/sample_receipt.jpg",
+        provider="mock",
+        raw_text=raw_text,
+        raw_json={},
+        confidence=0.94,
+    )
+
+    parsed = ReceiptParser().parse(ocr_result)
+    validated = ReceiptValidator().validate(parsed)
+
+    assert validated.gross_amount == 10800
+    assert validated.discount_amount == 10800
+    assert validated.final_amount == 0
+    assert validated.paid_amount == 0
+    assert validated.total_amount == 0
+    assert validated.amount_source in {"paid_amount", "final_amount"}
+    assert "discount_detected" in validated.amount_warnings
+    assert "zero_payment_after_discount" in validated.amount_warnings
+    assert "zero_payment_after_discount" in validated.review_reasons
+    assert validated.review_status == ReviewStatus.NEEDS_REVIEW.value
+
+
+def test_discount_amount_match_does_not_add_mismatch_reason(tmp_path):
+    receipt = replace(make_receipt(tmp_path), gross_amount=10800, discount_amount=10800, final_amount=0)
+
+    validated = ReceiptValidator().validate(receipt)
+
+    assert "amount_mismatch_after_discount" not in validated.review_reasons
+
+
+def test_discount_amount_mismatch_adds_review_reason(tmp_path):
+    receipt = replace(make_receipt(tmp_path), gross_amount=10800, discount_amount=1000, final_amount=0)
+
+    validated = ReceiptValidator().validate(receipt)
+
+    assert validated.review_status == ReviewStatus.NEEDS_REVIEW.value
+    assert "amount_mismatch_after_discount" in validated.review_reasons
+
+
+def test_discount_amount_larger_than_gross_adds_suspicious_reason(tmp_path):
+    receipt = replace(make_receipt(tmp_path), gross_amount=10800, discount_amount=21600, final_amount=0)
+
+    validated = ReceiptValidator().validate(receipt)
+
+    assert validated.review_status == ReviewStatus.NEEDS_REVIEW.value
+    assert "discount_amount_suspicious" in validated.review_reasons
+    assert "discount_amount_suspicious" in validated.validation_warnings
+
+
+def test_paid_amount_mismatch_adds_review_reason(tmp_path):
+    receipt = replace(make_receipt(tmp_path), paid_amount=10000, final_amount=9000)
+
+    validated = ReceiptValidator().validate(receipt)
+
+    assert validated.review_status == ReviewStatus.NEEDS_REVIEW.value
+    assert "paid_amount_mismatch" in validated.review_reasons
 
 
 def test_matching_amounts_do_not_add_mismatch_reason(tmp_path):
@@ -70,6 +186,70 @@ def test_missing_vat_amount_adds_review_reason(tmp_path):
 
     assert validated.review_status == ReviewStatus.NEEDS_REVIEW.value
     assert "부가세미확인" in validated.review_reasons
+
+
+def test_estimated_reference_vat_adds_review_reason_without_filling_explicit_vat(tmp_path):
+    validated = ReceiptValidator().validate(
+        replace(
+            make_receipt(tmp_path),
+            supply_amount=None,
+            vat_amount=None,
+            estimated_supply_amount=4636,
+            estimated_vat_amount=464,
+            vat_source="estimated_reference",
+            vat_warnings=["vat_not_explicit", "vat_estimated_reference_only"],
+            vat_review_required=True,
+        )
+    )
+
+    assert validated.review_status == ReviewStatus.NEEDS_REVIEW.value
+    assert validated.vat_amount is None
+    assert validated.supply_amount is None
+    assert "vat_estimated_reference_only" in validated.review_reasons
+    assert "vat_estimated_reference_only" in validated.validation_warnings
+
+
+def test_explicit_vat_does_not_add_missing_vat_reason(tmp_path):
+    validated = ReceiptValidator().validate(
+        replace(make_receipt(tmp_path), supply_amount=10000, vat_amount=1000, total_amount=11000, vat_source="explicit")
+    )
+
+    assert "부가세미확인" not in validated.review_reasons
+
+
+def test_zero_amount_vat_source_does_not_add_missing_vat_reason(tmp_path):
+    validated = ReceiptValidator().validate(
+        replace(
+            make_receipt(tmp_path),
+            total_amount=0,
+            supply_amount=None,
+            vat_amount=None,
+            estimated_supply_amount=None,
+            estimated_vat_amount=None,
+            vat_source="zero_amount",
+            vat_warnings=["vat_not_explicit", "vat_estimate_skipped_zero_amount"],
+            vat_review_required=False,
+        )
+    )
+
+    assert "부가세미확인" not in validated.review_reasons
+
+
+def test_estimated_vat_amounts_must_match_total_amount(tmp_path):
+    validated = ReceiptValidator().validate(
+        replace(
+            make_receipt(tmp_path),
+            total_amount=5100,
+            supply_amount=None,
+            vat_amount=None,
+            estimated_supply_amount=4600,
+            estimated_vat_amount=400,
+            vat_source="estimated_reference",
+            vat_review_required=True,
+        )
+    )
+
+    assert "vat_amount_mismatch" in validated.validation_warnings
 
 
 def test_valid_business_number_does_not_add_format_reason(tmp_path):

@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 import re
 from datetime import date, datetime
+from decimal import Decimal, ROUND_HALF_UP
 
 import pandas as pd
 
@@ -54,15 +55,35 @@ def normalize_amount(value: object) -> int | None:
     text = str(value).strip()
     if not text:
         return None
+    text = text.replace("－", "-").replace("−", "-").replace("–", "-").replace("—", "-")
+    is_parenthesized_negative = bool(re.search(r"\(\s*-?\s*[\d,.\s]+(?:원)?\s*\)", text))
+    text = re.sub(r"(?<=\d)[,.]\s*(?=\d{3}(?:\D|$))", "", text)
     text = text.replace(",", "")
     text = re.sub(r"[원₩\s]", "", text)
     text = re.sub(r"[^0-9.-]", "", text)
+    if is_parenthesized_negative and text and not text.startswith("-"):
+        text = f"-{text}"
     if text in {"", "-", ".", "-."}:
         return None
     try:
         return int(float(text))
     except ValueError:
         return None
+
+
+def normalize_discount_amount(value: object) -> int | None:
+    amount = normalize_amount(value)
+    if amount is None:
+        return None
+    return abs(amount)
+
+
+def calculate_estimated_vat_amounts(total_amount: int | None) -> tuple[int | None, int | None]:
+    if total_amount is None or total_amount <= 0:
+        return None, None
+    estimated_vat = int((Decimal(total_amount) / Decimal(11)).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+    estimated_supply = total_amount - estimated_vat
+    return estimated_supply, estimated_vat
 
 
 def normalize_column_name(value: object) -> str:

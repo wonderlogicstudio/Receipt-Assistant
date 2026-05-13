@@ -25,8 +25,20 @@ COL_INCLUDED = "포함"
 COL_DATE = "사용일자"
 COL_MERCHANT = "상호"
 COL_TOTAL = "총금액"
+COL_GROSS_AMOUNT = "할인전금액"
+COL_DISCOUNT_AMOUNT = "할인금액"
+COL_FINAL_AMOUNT = "최종결제금액"
+COL_PAID_AMOUNT = "실제결제금액"
+COL_AMOUNT_SOURCE = "금액판단기준"
+COL_AMOUNT_WARNINGS = "금액검토사유"
 COL_SUPPLY = "공급가액"
 COL_VAT = "부가세"
+COL_ESTIMATED_SUPPLY = "추정공급가액"
+COL_ESTIMATED_VAT = "추정부가세"
+COL_VAT_SOURCE = "부가세출처"
+COL_VAT_WARNINGS = "부가세검토사유"
+COL_SENSITIVE_DETECTED = "민감문구감지"
+COL_SENSITIVE_CATEGORIES = "민감문구유형"
 COL_PAYMENT = "결제수단"
 COL_RECOMMENDED_CATEGORY = "시스템 추천 비용항목"
 COL_EXPENSE_CATEGORY = "최종 비용항목"
@@ -47,8 +59,20 @@ REVIEW_DISPLAY_COLUMNS = [
     COL_DATE,
     COL_MERCHANT,
     COL_TOTAL,
+    COL_GROSS_AMOUNT,
+    COL_DISCOUNT_AMOUNT,
+    COL_FINAL_AMOUNT,
+    COL_PAID_AMOUNT,
+    COL_AMOUNT_SOURCE,
+    COL_AMOUNT_WARNINGS,
     COL_SUPPLY,
     COL_VAT,
+    COL_ESTIMATED_SUPPLY,
+    COL_ESTIMATED_VAT,
+    COL_VAT_SOURCE,
+    COL_VAT_WARNINGS,
+    COL_SENSITIVE_DETECTED,
+    COL_SENSITIVE_CATEGORIES,
     COL_PAYMENT,
     COL_RECOMMENDED_CATEGORY,
     COL_EXPENSE_CATEGORY,
@@ -76,6 +100,18 @@ REVIEW_EDITABLE_COLUMNS = [
 
 REVIEW_READ_ONLY_COLUMNS = [
     COL_RECOMMENDED_CATEGORY,
+    COL_GROSS_AMOUNT,
+    COL_DISCOUNT_AMOUNT,
+    COL_FINAL_AMOUNT,
+    COL_PAID_AMOUNT,
+    COL_AMOUNT_SOURCE,
+    COL_AMOUNT_WARNINGS,
+    COL_ESTIMATED_SUPPLY,
+    COL_ESTIMATED_VAT,
+    COL_VAT_SOURCE,
+    COL_VAT_WARNINGS,
+    COL_SENSITIVE_DETECTED,
+    COL_SENSITIVE_CATEGORIES,
     COL_REVIEW_REASON,
     COL_CARD_MATCH_STATUS,
     COL_CARD_MATCH_REASON,
@@ -198,8 +234,20 @@ def _record_to_review_row(record: ReceiptRecord) -> dict[str, Any]:
         COL_DATE: record.transaction_date,
         COL_MERCHANT: record.merchant_name,
         COL_TOTAL: record.total_amount,
+        COL_GROSS_AMOUNT: record.gross_amount,
+        COL_DISCOUNT_AMOUNT: record.discount_amount,
+        COL_FINAL_AMOUNT: record.final_amount,
+        COL_PAID_AMOUNT: record.paid_amount,
+        COL_AMOUNT_SOURCE: record.amount_source,
+        COL_AMOUNT_WARNINGS: "; ".join(record.amount_warnings),
         COL_SUPPLY: record.supply_amount,
         COL_VAT: record.vat_amount,
+        COL_ESTIMATED_SUPPLY: record.estimated_supply_amount,
+        COL_ESTIMATED_VAT: record.estimated_vat_amount,
+        COL_VAT_SOURCE: record.vat_source,
+        COL_VAT_WARNINGS: _joined_vat_reasons(record),
+        COL_SENSITIVE_DETECTED: record.sensitive_text_detected,
+        COL_SENSITIVE_CATEGORIES: "; ".join(record.sensitive_text_categories),
         COL_PAYMENT: record.payment_method,
         COL_RECOMMENDED_CATEGORY: record.recommended_expense_category,
         COL_EXPENSE_CATEGORY: record.expense_category,
@@ -222,7 +270,16 @@ def _joined_reasons(record: ReceiptRecord) -> str:
         *record.review_reasons,
         *record.parser_warnings,
         *record.validation_warnings,
+        *record.vat_warnings,
+        *record.sensitive_warnings,
     ]
+    return "; ".join(_unique(values))
+
+
+def _joined_vat_reasons(record: ReceiptRecord) -> str:
+    values = [*record.vat_warnings]
+    if record.vat_note:
+        values.append(record.vat_note)
     return "; ".join(_unique(values))
 
 

@@ -13,12 +13,61 @@ from app.core.enums import OCRProviderName, OCRStatus
 from app.core.exceptions import ConfigurationError
 from app.core.ocr_models import OCRResult
 from app.ocr.base import OCRInput, OCRProvider
+from app.security.sensitive_filter import sanitize_lines_for_parsing
 from app.storage.file_store import StoredFileMetadata
 
 
 RETRYABLE_HTTP_STATUS_CODES = {429, 500, 502, 503, 504}
 MIN_POLL_INTERVAL_SECONDS = 1.0
 _HTTP_DIAGNOSTIC_PATTERN = re.compile(r"(?P<stage>analyze|poll)_http_(?P<status>\d{3})")
+_AMOUNT_CONTEXT_PATTERN = re.compile(
+    r"[\-－−–—]?\s*(?:(?:[0-9OoIl|BSㅇ]{1,3}(?:(?:\s*[,\.]\s*|\s+)[0-9OoIl|BSㅇ]{3})+)|[0-9OoIl|BSㅇ]+)"
+)
+_AMOUNT_CONTEXT_KEYWORDS = (
+    "사업자번호",
+    "사업자등록번호",
+    "등록번호",
+    "전화",
+    "tel",
+    "대표번호",
+    "매장전화",
+    "상호",
+    "상호명",
+    "가맹점명",
+    "매장명",
+    "총매출액",
+    "총 매출액",
+    "상품금액",
+    "상품 금액",
+    "할인",
+    "할인금액",
+    "할인 금액",
+    "할인내역",
+    "할인 내역",
+    "합계",
+    "합계금액",
+    "합계 금액",
+    "받은금액",
+    "받은 금액",
+    "반은금액",
+    "결제금액",
+    "결제 금액",
+    "카드결제",
+    "카드 결제",
+    "현금결제",
+    "현금 결제",
+    "최종결제금액",
+    "결제대상금액",
+    "멤버십",
+    "쿠폰",
+    "포인트",
+    "차감",
+    "프로모션",
+    "초이스",
+    "vvip",
+    "vip",
+    "kt",
+)
 
 
 class AzureDocumentIntelligenceProvider(OCRProvider):
@@ -96,7 +145,7 @@ class AzureDocumentIntelligenceProvider(OCRProvider):
             source_file_name=source_info["source_file_name"],
             stored_relative_path=source_info["stored_relative_path"],
             provider=self.provider_name,
-            raw_text=self._safe_summary_text(sanitized),
+            raw_text=self._safe_parser_text(sanitized),
             raw_json=sanitized,
             confidence=sanitized.get("confidence") or 0.0,
         )
@@ -206,8 +255,10 @@ class AzureDocumentIntelligenceProvider(OCRProvider):
         warnings = []
         if not any(mapped_fields.values()):
             warnings.append("mapped_fields_empty")
+        amount_context_lines = _amount_context_lines(payload)
         return {
             **mapped_fields,
+            "amount_context_lines": amount_context_lines,
             "fields": sanitized_fields,
             "provider": self.provider_name,
             "confidence": confidence if confidence is not None else 0.0,
@@ -265,6 +316,13 @@ class AzureDocumentIntelligenceProvider(OCRProvider):
         ]
         return "\n".join(f"{label}: {value}" for label, value in labels if value not in {None, ""})
 
+    def _safe_parser_text(self, sanitized: dict[str, Any]) -> str:
+        lines = [self._safe_summary_text(sanitized)]
+        context_lines = sanitized.get("amount_context_lines")
+        if isinstance(context_lines, list):
+            lines.extend(str(line) for line in context_lines if line)
+        return "\n".join(line for line in lines if line)
+
     def _source_info(self, source: OCRInput) -> dict[str, Any]:
         if isinstance(source, StoredFileMetadata):
             stored_relative_path = source.stored_relative_path
@@ -319,6 +377,87 @@ def _average(values: list[float]) -> float | None:
     if not values:
         return None
     return sum(values) / len(values)
+
+
+def _amount_context_lines(payload: dict[str, Any]) -> list[str]:
+    result: list[str] = []
+    for line in _ocr_text_lines(payload):
+        safe_line = sanitize_lines_for_parsing(str(line or ""))
+        for item in safe_line.splitlines():
+            normalized = re.sub(r"\s+", " ", item).strip()
+            if not normalized:
+                continue
+            if _is_amount_context_line(normalized):
+                result.append(normalized)
+            if len(result) >= 120:
+                return result
+    return result
+
+
+def _ocr_text_lines(payload: Any) -> list[str]:
+    lines: list[str] = []
+    analyze_result = payload.get("analyzeResult") if isinstance(payload, dict) and isinstance(payload.get("analyzeResult"), dict) else payload
+    if isinstance(analyze_result, dict):
+        for page in analyze_result.get("pages") or []:
+            if not isinstance(page, dict):
+                continue
+            for line in page.get("lines") or []:
+                text = _content_value(line)
+                if text:
+                    lines.append(text)
+        for paragraph in analyze_result.get("paragraphs") or []:
+            text = _content_value(paragraph)
+            if text:
+                lines.append(text)
+        for table in analyze_result.get("tables") or []:
+            if not isinstance(table, dict):
+                continue
+            rows: dict[int, list[tuple[int, str]]] = {}
+            for cell in table.get("cells") or []:
+                if not isinstance(cell, dict):
+                    continue
+                row_index = _safe_int(cell.get("rowIndex"))
+                column_index = _safe_int(cell.get("columnIndex"))
+                text = _content_value(cell)
+                if row_index is None or column_index is None or not text:
+                    continue
+                rows.setdefault(row_index, []).append((column_index, text))
+            for row_index in sorted(rows):
+                row = " ".join(text for _, text in sorted(rows[row_index], key=lambda item: item[0]))
+                if row:
+                    lines.append(row)
+    return lines
+
+
+def _content_value(value: Any) -> str | None:
+    if isinstance(value, dict):
+        for key in ("content", "text", "value", "valueString"):
+            if value.get(key) not in {None, ""}:
+                return str(value[key])
+    if isinstance(value, str):
+        return value
+    return None
+
+
+def _safe_int(value: object) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_amount_context_line(line: str) -> bool:
+    normalized = line.lower().replace(" ", "")
+    if any(keyword.lower().replace(" ", "") in normalized for keyword in _AMOUNT_CONTEXT_KEYWORDS):
+        return True
+    if re.fullmatch(rf"\s*{_AMOUNT_CONTEXT_PATTERN.pattern}\s*(?:원)?\s*", line, flags=re.IGNORECASE):
+        return True
+    if _AMOUNT_CONTEXT_PATTERN.search(line) and any(
+        keyword in normalized
+        for keyword in ("kt", "vvip", "vip", "멤버십", "쿠폰", "포인트", "초이스", "차감", "프로모션")
+    ):
+        return True
+    return False
 
 
 def _request_diagnostic_code(exc: requests.RequestException) -> str:

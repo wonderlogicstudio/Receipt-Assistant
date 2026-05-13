@@ -76,8 +76,23 @@ def test_repository_saves_and_reads_related_rows_without_absolute_paths(tmp_path
                 "merchant_name": "테스트상호",
                 "business_number": "123-45-67890",
                 "total_amount": 12000,
+                "gross_amount": 13000,
+                "discount_amount": 1000,
+                "final_amount": 12000,
+                "paid_amount": 12000,
+                "amount_source": "paid_amount",
+                "amount_warnings": ["discount_detected"],
                 "supply_amount": 10909,
                 "vat_amount": 1091,
+                "estimated_supply_amount": None,
+                "estimated_vat_amount": None,
+                "vat_source": "explicit",
+                "vat_note": "영수증에 부가세가 명시되어 있음",
+                "vat_warnings": [],
+                "vat_review_required": False,
+                "sensitive_text_detected": True,
+                "sensitive_text_categories": ["wifi_password"],
+                "sensitive_warnings": ["wifi_password_detected"],
                 "payment_method": "카드",
                 "recommended_expense_category": "사무용품비",
                 "expense_category": None,
@@ -130,6 +145,19 @@ def test_repository_saves_and_reads_related_rows_without_absolute_paths(tmp_path
     assert uploaded["original_file_name"] == "receipt.jpg"
     assert uploaded["stored_relative_path"] == "receipt.jpg"
     assert receipt["source_file_name"] == "receipt.jpg"
+    assert receipt["gross_amount"] == 13000
+    assert receipt["discount_amount"] == 1000
+    assert receipt["final_amount"] == 12000
+    assert receipt["paid_amount"] == 12000
+    assert receipt["amount_source"] == "paid_amount"
+    assert json.loads(receipt["amount_warnings_json"]) == ["discount_detected"]
+    assert receipt["vat_source"] == "explicit"
+    assert receipt["vat_note"] == "영수증에 부가세가 명시되어 있음"
+    assert json.loads(receipt["vat_warnings_json"]) == []
+    assert receipt["vat_review_required"] == 0
+    assert receipt["sensitive_text_detected"] == 1
+    assert json.loads(receipt["sensitive_text_categories_json"]) == ["wifi_password"]
+    assert json.loads(receipt["sensitive_warnings_json"]) == ["wifi_password_detected"]
     assert json.loads(receipt["parser_warnings_json"]) == ["상호 확인"]
     assert card["source_file_name"] == "card.csv"
     assert card["approval_number"] == "***3456"

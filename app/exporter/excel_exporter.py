@@ -28,8 +28,14 @@ SHEET_EXCLUDED = "08_제외내역"
 
 AMOUNT_HEADERS = {
     "총금액",
+    "할인전금액",
+    "할인금액",
+    "최종결제금액",
+    "실제결제금액",
     "공급가액",
     "부가세",
+    "추정공급가액",
+    "추정부가세",
     "총금액합계",
     "공급가액합계",
     "부가세합계",
@@ -37,6 +43,7 @@ AMOUNT_HEADERS = {
     "카드금액",
 }
 DATE_HEADERS = {"사용일자", "영수증사용일자", "카드사용일자"}
+VAT_REFERENCE_HEADERS = {"추정공급가액", "추정부가세", "부가세출처", "부가세검토사유"}
 FORMULA_PREFIXES = ("=", "+", "-", "@")
 
 
@@ -71,8 +78,20 @@ class ExcelExporter:
         "상호",
         "사업자번호",
         "총금액",
+        "할인전금액",
+        "할인금액",
+        "최종결제금액",
+        "실제결제금액",
+        "금액판단기준",
+        "금액검토사유",
         "공급가액",
         "부가세",
+        "추정공급가액",
+        "추정부가세",
+        "부가세출처",
+        "부가세검토사유",
+        "민감문구감지",
+        "민감문구유형",
         "결제수단",
         "시스템추천비용항목",
         "최종비용항목",
@@ -434,8 +453,20 @@ class ExcelExporter:
             receipt.merchant_name,
             receipt.business_number,
             receipt.total_amount,
+            receipt.gross_amount,
+            receipt.discount_amount,
+            receipt.final_amount,
+            receipt.paid_amount,
+            receipt.amount_source,
+            self._join_unique(receipt.amount_warnings),
             receipt.supply_amount,
             receipt.vat_amount,
+            receipt.estimated_supply_amount,
+            receipt.estimated_vat_amount,
+            receipt.vat_source,
+            self._join_unique([*receipt.vat_warnings, receipt.vat_note] if receipt.vat_note else receipt.vat_warnings),
+            "Y" if receipt.sensitive_text_detected else "",
+            self._join_unique(receipt.sensitive_text_categories),
             receipt.payment_method,
             receipt.recommended_expense_category,
             receipt.expense_category,
@@ -457,9 +488,10 @@ class ExcelExporter:
 
     def _format_sheet(self, sheet) -> None:
         header_fill = PatternFill("solid", fgColor="D9EAF7")
+        reference_fill = PatternFill("solid", fgColor="FFF2CC")
         for cell in sheet[1]:
             cell.font = Font(bold=True)
-            cell.fill = header_fill
+            cell.fill = reference_fill if cell.value in VAT_REFERENCE_HEADERS else header_fill
         sheet.freeze_panes = "A2"
         sheet.auto_filter.ref = sheet.dimensions
 
@@ -475,6 +507,8 @@ class ExcelExporter:
                     cell.number_format = "#,##0"
                 if header in DATE_HEADERS:
                     cell.number_format = "yyyy-mm-dd"
+                if header in VAT_REFERENCE_HEADERS:
+                    cell.fill = reference_fill
 
     def _cell_value(self, value: object) -> object:
         if isinstance(value, Path):
@@ -508,11 +542,22 @@ class ExcelExporter:
             *receipt.review_reasons,
             *receipt.parser_warnings,
             *receipt.validation_warnings,
+            *receipt.amount_warnings,
+            *receipt.vat_warnings,
+            *receipt.sensitive_warnings,
         ]
         return self._join_unique(values)
 
     def _warning_text(self, receipt: ReceiptRecord) -> str:
-        return self._join_unique([*receipt.parser_warnings, *receipt.validation_warnings])
+        return self._join_unique(
+            [
+                *receipt.parser_warnings,
+                *receipt.validation_warnings,
+                *receipt.amount_warnings,
+                *receipt.vat_warnings,
+                *receipt.sensitive_warnings,
+            ]
+        )
 
     def _short_message(self, receipt: ReceiptRecord) -> str:
         reasons = self._review_reason_text(receipt)
@@ -526,6 +571,12 @@ class ExcelExporter:
         if receipt.review_status == ReviewStatus.NEEDS_REVIEW.value:
             return True
         if receipt.review_reasons or receipt.validation_warnings or receipt.parser_warnings:
+            return True
+        if any(warning != "discount_detected" for warning in receipt.amount_warnings):
+            return True
+        if receipt.vat_review_required or receipt.vat_warnings:
+            return True
+        if receipt.sensitive_text_detected or receipt.sensitive_warnings:
             return True
         if receipt.card_match_status in {CardMatchStatus.UNMATCHED.value, CardMatchStatus.CANDIDATE.value}:
             return True

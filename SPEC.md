@@ -34,8 +34,23 @@ transaction_date
 merchant_name
 business_number
 total_amount
+gross_amount
+discount_amount
+final_amount
+paid_amount
+amount_source
+amount_warnings
 supply_amount
 vat_amount
+estimated_supply_amount
+estimated_vat_amount
+vat_source
+vat_note
+vat_warnings
+vat_review_required
+sensitive_text_detected
+sensitive_text_categories
+sensitive_warnings
 payment_method
 recommended_expense_category
 recommended_expense_category_reason
@@ -63,6 +78,14 @@ ocr_provider
 ```
 
 `recommended_expense_category`는 시스템 추천값입니다. `expense_category`는 사용자가 검수 화면에서 확인하거나 수정한 최종 입력값입니다. 엑셀의 비용항목별 요약은 `expense_category` 기준입니다.
+
+`total_amount`는 비용 기준 최종 결제금액입니다. 할인금액이 있는 영수증에서는 할인 전 금액(`gross_amount`), 할인/쿠폰/포인트 등 차감 금액(`discount_amount`), 할인 적용 후 결제대상금액(`final_amount`), 실제 받은금액/카드결제/현금결제 기준 금액(`paid_amount`)을 별도 필드로 보존합니다. `amount_source`는 `total_amount` 판단 기준이며, `amount_warnings`는 할인 감지, 할인 후 0원 결제, 금액 불일치 같은 검토 사유입니다. 할인 후 결제금액이 0원인 경우 `total_amount=0`이 가능하며 자동 제외하지 않습니다.
+
+`final_amount`와 `paid_amount`가 함께 있는 경우 일반적으로 `paid_amount`를 우선하되, `결제금액 기준` 같은 설명 문구나 영수증 하단의 푸터 숫자처럼 실제 결제금액으로 보기 어려운 후보는 사용하지 않습니다. `paid_amount`가 `final_amount` 또는 `payment_target_amount`와 크게 어긋나면 `amount_warnings`에 검토 사유를 남기고 비용 기준 금액은 더 신뢰할 수 있는 최종/결제대상금액을 사용합니다.
+
+`supply_amount`와 `vat_amount`는 영수증에 명시된 공급가액과 부가세만 저장합니다. 부가세가 명시되지 않은 경우 추정값을 `supply_amount` 또는 `vat_amount`에 넣지 않고, 참고용 추정 공급가액(`estimated_supply_amount`)과 참고용 추정 부가세(`estimated_vat_amount`)에 별도로 저장합니다. `vat_source`는 부가세 정보 출처, `vat_note`는 부가세 관련 설명, `vat_warnings`는 부가세 검토 사유, `vat_review_required`는 사용자 확인 필요 여부입니다. 추정값은 확정 세무 처리값이 아니라 사용자 확인이 필요한 참고값입니다.
+
+`sensitive_text_detected`는 OCR 결과에서 민감문구 가능성이 감지되었는지 나타냅니다. `sensitive_text_categories`는 감지 유형 목록이며, `sensitive_warnings`는 민감문구 관련 검토 사유입니다. 실제 민감값은 DB, 엑셀, 화면에 저장하거나 표시하지 않고 category만 저장합니다. 사업자등록번호와 승인번호는 현재 업무상 필요한 필드일 수 있으므로 이번 단계에서 무조건 제거하지 않습니다.
 
 ### OCRResult
 
@@ -190,8 +213,23 @@ transaction_date
 merchant_name
 business_number
 total_amount
+gross_amount
+discount_amount
+final_amount
+paid_amount
+amount_source
+amount_warnings_json
 supply_amount
 vat_amount
+estimated_supply_amount
+estimated_vat_amount
+vat_source
+vat_note
+vat_warnings_json
+vat_review_required
+sensitive_text_detected
+sensitive_text_categories_json
+sensitive_warnings_json
 payment_method
 recommended_expense_category
 expense_category
@@ -264,6 +302,10 @@ receipt_summary_YYYYMMDD_HHMMSS.xlsx
 
 `07` 시트는 OCR 원문 전체나 provider raw JSON 전체를 넣지 않고, 처리 단계와 상태, 짧은 메시지만 기록합니다.
 
+`01 정리내역`은 기존 총금액 컬럼을 유지하면서 할인전금액, 할인금액, 최종결제금액, 실제결제금액, 금액판단기준, 금액검토사유를 함께 표시합니다. 공급가액과 부가세는 영수증 명시값 기준이며, 참고 추정값은 추정공급가액과 추정부가세 컬럼으로 분리합니다. 민감문구가 감지된 경우에는 감지 여부와 category만 표시하고 실제 값은 표시하지 않습니다.
+
+`02 월별요약`과 `03 비용항목별요약`은 `total_amount` 기준으로 합계를 계산합니다. 추정부가세는 명시 부가세 합계에 자동으로 합산하지 않습니다.
+
 ## 6. 검수 상태와 제외 처리
 
 - `needs_review`, `pending`은 검수 필요로 표시합니다.
@@ -310,3 +352,12 @@ receipt_summary_YYYYMMDD_HHMMSS.xlsx
 4. API key와 secret은 코드에 하드코딩하지 않습니다.
 5. `.env`, `data/uploads`, `data/outputs`, `output`, `data/app.db`, `*.db`는 Git에 올리지 않습니다.
 6. 테스트 데이터에는 실제 고객 파일이나 실제 민감정보를 넣지 않습니다.
+7. WiFi PW, 비밀번호, 카드번호 전체 등 민감문구 가능성이 감지되면 실제 값이 아니라 category와 검토 사유만 저장합니다.
+
+## 10. Azure OCR Parser 입력 기준
+
+Azure OCR provider는 provider raw JSON 전체나 OCR 원문 전체를 화면, DB, 엑셀에 저장하지 않습니다. Parser 입력에는 문서 필드 요약과 제한된 context line만 전달합니다.
+
+Parser 입력용 context line에는 금액 판단과 기본 식별에 필요한 라인만 포함합니다. 예를 들어 사업자번호, 전화/TEL, 상호/가맹점명, 총매출액, 상품금액, 할인금액, 합계금액, 받은금액, 결제대상금액, 카드결제, 현금결제, 쿠폰/포인트/멤버십 관련 라인이 해당됩니다.
+
+WiFi PW, 비밀번호, token, secret, 카드번호 전체, 주민번호 형식 등 민감문구 가능성이 있는 라인은 실제 값을 저장하거나 표시하지 않습니다. 사업자등록번호와 승인번호는 업무상 필요한 필드일 수 있으므로 무조건 제거하지 않되, 승인번호나 수량 숫자가 금액 후보로 잘못 사용되지 않도록 Parser에서 필터링합니다.

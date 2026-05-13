@@ -47,6 +47,21 @@ def make_receipt(
     export_included: bool = True,
     source_file_name: str = r"C:\private\receipt.jpg",
     user_note: str | None = None,
+    gross_amount: int | None = None,
+    discount_amount: int | None = None,
+    final_amount: int | None = None,
+    paid_amount: int | None = None,
+    amount_source: str | None = None,
+    amount_warnings: list[str] | None = None,
+    estimated_supply_amount: int | None = None,
+    estimated_vat_amount: int | None = None,
+    vat_source: str | None = None,
+    vat_note: str | None = None,
+    vat_warnings: list[str] | None = None,
+    vat_review_required: bool = False,
+    sensitive_text_detected: bool = False,
+    sensitive_text_categories: list[str] | None = None,
+    sensitive_warnings: list[str] | None = None,
 ) -> ReceiptRecord:
     return ReceiptRecord.create(
         session_id="session-1",
@@ -77,6 +92,21 @@ def make_receipt(
         duplicate_reason=duplicate_reason,
         export_included=export_included,
         user_note=user_note,
+        gross_amount=gross_amount,
+        discount_amount=discount_amount,
+        final_amount=final_amount,
+        paid_amount=paid_amount,
+        amount_source=amount_source,
+        amount_warnings=amount_warnings or [],
+        estimated_supply_amount=estimated_supply_amount,
+        estimated_vat_amount=estimated_vat_amount,
+        vat_source=vat_source,
+        vat_note=vat_note,
+        vat_warnings=vat_warnings or [],
+        vat_review_required=vat_review_required,
+        sensitive_text_detected=sensitive_text_detected,
+        sensitive_text_categories=sensitive_text_categories or [],
+        sensitive_warnings=sensitive_warnings or [],
     )
 
 
@@ -176,6 +206,121 @@ def test_amount_and_date_cells_are_stored_as_values_with_formats():
     assert summary["E2"].number_format == "#,##0"
 
 
+def test_summary_sheet_includes_discount_amount_columns():
+    receipt = make_receipt(
+        total_amount=0,
+        gross_amount=10800,
+        discount_amount=10800,
+        final_amount=0,
+        paid_amount=0,
+        amount_source="paid_amount",
+        amount_warnings=["discount_detected", "zero_payment_after_discount"],
+    )
+
+    workbook = workbook_from_bytes(ExcelExporter().export([receipt]))
+    summary = workbook["01_정리내역"]
+
+    assert "할인전금액" in headers(summary)
+    assert "금액검토사유" in headers(summary)
+    assert summary["E2"].value == 0
+    assert summary["F2"].value == 10800
+    assert summary["G2"].value == 10800
+    assert summary["H2"].value == 0
+    assert summary["I2"].value == 0
+    assert summary["J2"].value == "paid_amount"
+    assert "zero_payment_after_discount" in summary["K2"].value
+    assert summary["F2"].number_format == "#,##0"
+
+
+def test_discount_zero_payment_pipeline_trace_excel_preserves_amount_state_without_raw_ocr_values():
+    receipt = make_receipt(
+        merchant_name="할인추적상호",
+        source_file_name="sample_receipt.jpg",
+        total_amount=0,
+        gross_amount=10800,
+        discount_amount=10800,
+        final_amount=0,
+        paid_amount=0,
+        amount_source="paid_amount",
+        amount_warnings=["discount_detected", "zero_payment_after_discount"],
+        review_status=ReviewStatus.NEEDS_REVIEW.value,
+        review_reasons=["할인 후 결제금액 0원, 사용자 확인 필요"],
+    )
+    ocr_result = OCRResult.completed(
+        source_file_id="source-1",
+        source_file_name="sample_receipt.jpg",
+        stored_relative_path="data/uploads/session-1/sample_receipt.jpg",
+        provider="mock",
+        raw_text="RAW_TRACE_TEXT_SHOULD_NOT_APPEAR",
+        raw_json={"marker": "RAW_TRACE_JSON_SHOULD_NOT_APPEAR"},
+        confidence=0.9,
+    )
+
+    workbook = workbook_from_bytes(ExcelExporter().export_to_bytes([receipt], [ocr_result]))
+    summary = workbook["01_정리내역"]
+    review = workbook["04_검토필요"]
+    column = {name: index + 1 for index, name in enumerate(headers(summary))}
+    serialized = "\n".join(str(value) for value in all_cell_values(workbook))
+
+    assert summary.cell(row=2, column=column["총금액"]).value == 0
+    assert summary.cell(row=2, column=column["할인전금액"]).value == 10800
+    assert summary.cell(row=2, column=column["할인금액"]).value == 10800
+    assert summary.cell(row=2, column=column["최종결제금액"]).value == 0
+    assert summary.cell(row=2, column=column["실제결제금액"]).value == 0
+    assert summary.cell(row=2, column=column["금액판단기준"]).value == "paid_amount"
+    assert "zero_payment_after_discount" in summary.cell(row=2, column=column["금액검토사유"]).value
+    assert review.max_row == 2
+    assert review["C2"].value == "할인추적상호"
+    assert "RAW_TRACE_TEXT_SHOULD_NOT_APPEAR" not in serialized
+    assert "RAW_TRACE_JSON_SHOULD_NOT_APPEAR" not in serialized
+
+
+def test_summary_sheet_includes_estimated_vat_columns_with_reference_style():
+    receipt = make_receipt(
+        total_amount=5100,
+        supply_amount=None,
+        vat_amount=None,
+        estimated_supply_amount=4636,
+        estimated_vat_amount=464,
+        vat_source="estimated_reference",
+        vat_note="부가세 미표기, 참고용 역산값",
+        vat_warnings=["vat_not_explicit", "vat_estimated_reference_only"],
+        vat_review_required=True,
+    )
+
+    workbook = workbook_from_bytes(ExcelExporter().export([receipt]))
+    summary = workbook["01_정리내역"]
+
+    assert "추정공급가액" in headers(summary)
+    assert "추정부가세" in headers(summary)
+    assert summary["N2"].value == 4636
+    assert summary["O2"].value == 464
+    assert summary["P2"].value == "estimated_reference"
+    assert "vat_estimated_reference_only" in summary["Q2"].value
+    assert summary["N2"].number_format == "#,##0"
+    assert summary["N1"].fill.fgColor.rgb == "00FFF2CC"
+    assert summary["N2"].fill.fgColor.rgb == "00FFF2CC"
+
+
+def test_summary_sheet_includes_sensitive_category_columns_without_values():
+    receipt = make_receipt(
+        sensitive_text_detected=True,
+        sensitive_text_categories=["wifi_password", "card_number"],
+        sensitive_warnings=["wifi_password_detected", "full_card_number_masked"],
+        user_note="검수 메모",
+    )
+
+    workbook = workbook_from_bytes(ExcelExporter().export([receipt]))
+    summary = workbook["01_정리내역"]
+    serialized = "\n".join(str(value) for value in all_cell_values(workbook))
+
+    assert "민감문구감지" in headers(summary)
+    assert "민감문구유형" in headers(summary)
+    assert summary["R2"].value == "Y"
+    assert summary["S2"].value == "wifi_password; card_number"
+    assert "sample-password-1234" not in serialized
+
+
 def test_monthly_summary_uses_included_receipts_only():
     included = make_receipt(total_amount=10000, supply_amount=9000, vat_amount=1000)
     excluded = make_receipt(
@@ -224,8 +369,8 @@ def test_recommended_category_does_not_fill_final_category_in_summary():
     workbook = workbook_from_bytes(ExcelExporter().export([receipt]))
     summary = workbook["01_정리내역"]
 
-    assert summary["I2"].value == "시스템추천"
-    assert summary["J2"].value is None
+    assert summary["U2"].value == "시스템추천"
+    assert summary["V2"].value is None
 
 
 def test_review_sheet_includes_needs_review_and_warning_records():
@@ -246,6 +391,66 @@ def test_review_sheet_includes_needs_review_and_warning_records():
     assert review.max_row == 3
     merchants = {review["C2"].value, review["C3"].value}
     assert merchants == {"검토상호", "경고상호"}
+
+
+def test_review_sheet_includes_zero_payment_after_discount_record():
+    receipt = make_receipt(
+        merchant_name="할인상호",
+        total_amount=0,
+        gross_amount=10800,
+        discount_amount=10800,
+        final_amount=0,
+        paid_amount=0,
+        review_status=ReviewStatus.NEEDS_REVIEW.value,
+        review_reasons=["zero_payment_after_discount"],
+        amount_warnings=["discount_detected", "zero_payment_after_discount"],
+    )
+
+    workbook = workbook_from_bytes(ExcelExporter().export([receipt]))
+    review = workbook["04_검토필요"]
+
+    assert review.max_row == 2
+    assert review["C2"].value == "할인상호"
+    assert "zero_payment_after_discount" in review["F2"].value
+
+
+def test_review_sheet_includes_estimated_vat_reference_record():
+    receipt = make_receipt(
+        merchant_name="부가세미표기상호",
+        total_amount=5100,
+        supply_amount=None,
+        vat_amount=None,
+        estimated_supply_amount=4636,
+        estimated_vat_amount=464,
+        vat_source="estimated_reference",
+        vat_warnings=["vat_not_explicit", "vat_estimated_reference_only"],
+        vat_review_required=True,
+    )
+
+    workbook = workbook_from_bytes(ExcelExporter().export([receipt]))
+    review = workbook["04_검토필요"]
+
+    assert review.max_row == 2
+    assert review["C2"].value == "부가세미표기상호"
+    assert "vat_estimated_reference_only" in review["F2"].value
+
+
+def test_review_sheet_includes_sensitive_text_detected_record_without_values():
+    receipt = make_receipt(
+        merchant_name="민감문구상호",
+        sensitive_text_detected=True,
+        sensitive_text_categories=["wifi_password"],
+        sensitive_warnings=["wifi_password_detected"],
+    )
+
+    workbook = workbook_from_bytes(ExcelExporter().export([receipt]))
+    review = workbook["04_검토필요"]
+    serialized = "\n".join(str(value) for value in all_cell_values(workbook))
+
+    assert review.max_row == 2
+    assert review["C2"].value == "민감문구상호"
+    assert "wifi_password_detected" in review["F2"].value
+    assert "sample-password-1234" not in serialized
 
 
 def test_card_match_status_and_reason_are_written():
@@ -316,8 +521,8 @@ def test_formula_like_strings_are_safely_stored_as_text():
     summary = workbook["01_정리내역"]
 
     assert summary["C2"].value == "'=SUM(1,2)"
-    assert summary["P2"].value == "'@receipt.jpg"
-    assert summary["Q2"].value == "'+memo"
+    assert summary["AB2"].value == "'@receipt.jpg"
+    assert summary["AC2"].value == "'+memo"
 
 
 def test_all_sheets_have_freeze_panes_and_auto_filter():

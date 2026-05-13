@@ -60,6 +60,39 @@ class FailingOCRProvider:
         )
 
 
+class ColumnarDiscountOCRProvider:
+    provider_name = "azure"
+
+    def extract(self, source):
+        raw_text = "\n".join(
+            [
+                "상호명: 테스트상점",
+                "사업자번호: 123-45-67890",
+                "거래일자: 2026.05.10",
+                "제품명",
+                "레디팩(아몬드봉봉) 10,800",
+                "KT 멤버십 VVIP 초이스 -10,800",
+                "총매출액",
+                "할인금액",
+                "합계금액",
+                "받은금액",
+                "10,800",
+                "10,800",
+                "0",
+                "0",
+            ]
+        )
+        return OCRResult.completed(
+            source_file_id="source-id",
+            source_file_name="sample_receipt.jpg",
+            stored_relative_path=None,
+            provider=self.provider_name,
+            raw_text=raw_text,
+            raw_json={},
+            confidence=0.94,
+        )
+
+
 def make_file_store(tmp_path: Path) -> FileStore:
     return FileStore(
         AppConfig(
@@ -161,6 +194,29 @@ def test_process_receipt_failure_reports_safe_ocr_diagnostic(tmp_path):
     assert str(tmp_path) not in result.errors[0]
 
 
+def test_process_receipt_flow_keeps_columnar_discount_zero_payment_amounts(tmp_path):
+    file_store = make_file_store(tmp_path)
+    receipt_metadata = save_upload(file_store, "session1", "sample_receipt.jpg")
+
+    result = process_receipt_files_with_mock_ocr(
+        [receipt_metadata],
+        file_store=file_store,
+        ocr_provider=ColumnarDiscountOCRProvider(),
+    )
+
+    assert result.errors == []
+    assert len(result.receipt_records) == 1
+    receipt = result.receipt_records[0]
+    assert receipt.gross_amount == 10800
+    assert receipt.discount_amount == 10800
+    assert receipt.final_amount == 0
+    assert receipt.paid_amount == 0
+    assert receipt.total_amount == 0
+    assert receipt.amount_source == "paid_amount"
+    assert "discount_detected" in receipt.amount_warnings
+    assert "zero_payment_after_discount" in receipt.amount_warnings
+
+
 def test_process_card_statement_files_reads_csv_and_xlsx(tmp_path):
     file_store = make_file_store(tmp_path)
     csv_metadata = save_upload(file_store, "session1", "card.csv", card_csv_bytes())
@@ -224,7 +280,7 @@ def test_reviewed_dataframe_changes_are_reflected_in_excel(tmp_path):
     summary = workbook["01_정리내역"]
     assert summary["C2"].value == "수정상호"
     assert summary["E2"].value == 45000
-    assert summary["J2"].value == "사용자입력"
+    assert summary["V2"].value == "사용자입력"
 
 
 def test_excluded_reviewed_record_is_not_in_summary_but_is_kept_in_excluded_sheet(tmp_path):

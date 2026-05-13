@@ -8,6 +8,7 @@ import requests
 from app.core.config import AppConfig
 from app.core.enums import OCRStatus
 from app.ocr.azure_provider import AzureDocumentIntelligenceProvider
+from app.parser.receipt_parser import ReceiptParser
 
 
 class FakeResponse:
@@ -125,6 +126,91 @@ def test_azure_provider_success_returns_completed_result(tmp_path):
     assert 0 <= result.confidence <= 1
     assert session.post_calls
     assert session.get_calls
+
+
+def test_azure_provider_keeps_safe_amount_context_lines_for_parser_without_sensitive_values(tmp_path):
+    payload = success_payload()
+    payload["analyzeResult"]["pages"] = [
+        {
+            "lines": [
+                {"content": "WIFI PW: sample-password-1234"},
+                {"content": "사업자번호 123-45-67890"},
+                {"content": "TEL 02-1234-5678"},
+                {"content": "총매출액"},
+                {"content": "할인금액"},
+                {"content": "합계금액"},
+                {"content": "받은금액"},
+                {"content": "10,800"},
+                {"content": "10,800"},
+                {"content": "0"},
+                {"content": "0"},
+            ]
+        }
+    ]
+    session = FakeSession(
+        post_response=FakeResponse(status_code=202, headers={"Operation-Location": "https://poll.example/result"}),
+        get_responses=[FakeResponse(payload=payload)],
+    )
+    provider = make_provider(session)
+
+    result = provider.extract(make_sample_file(tmp_path))
+
+    assert result.raw_json["amount_context_lines"] == [
+        "사업자번호 123-45-67890",
+        "TEL [REDACTED]",
+        "총매출액",
+        "할인금액",
+        "합계금액",
+        "받은금액",
+        "10,800",
+        "10,800",
+        "0",
+        "0",
+    ]
+    assert "할인금액" in result.raw_text
+    assert "사업자번호 123-45-67890" in result.raw_text
+    assert "sample-password-1234" not in result.raw_text
+    assert "02-1234-5678" not in result.raw_text
+    assert "sample-password-1234" not in str(result.raw_json)
+
+    receipt = ReceiptParser().parse(result)
+    assert receipt.business_number == "123-45-67890"
+    assert receipt.gross_amount == 10800
+    assert receipt.discount_amount == 10800
+    assert receipt.final_amount == 0
+    assert receipt.paid_amount == 0
+    assert receipt.total_amount == 0
+
+
+def test_azure_provider_keeps_card_payment_context_line_for_parser(tmp_path):
+    payload = success_payload()
+    payload["analyzeResult"]["pages"] = [
+        {
+            "lines": [
+                {"content": "결제대상금액 105,720"},
+                {"content": "카드결제(IC) 일시불 / 105,720"},
+                {"content": "※ 해당카드 결제금액 기준"},
+                {"content": "캐셔:063453 김00"},
+                {"content": "1520"},
+            ]
+        }
+    ]
+    session = FakeSession(
+        post_response=FakeResponse(status_code=202, headers={"Operation-Location": "https://poll.example/result"}),
+        get_responses=[FakeResponse(payload=payload)],
+    )
+    provider = make_provider(session)
+
+    result = provider.extract(make_sample_file(tmp_path))
+
+    assert "카드결제(IC) 일시불 / 105,720" in result.raw_json["amount_context_lines"]
+    assert "카드결제(IC) 일시불 / 105,720" in result.raw_text
+
+    receipt = ReceiptParser().parse(result)
+    assert receipt.final_amount == 105720
+    assert receipt.paid_amount == 105720
+    assert receipt.total_amount == 105720
+    assert receipt.amount_source == "paid_amount"
 
 
 def test_azure_provider_http_failure_returns_failed_result(tmp_path):

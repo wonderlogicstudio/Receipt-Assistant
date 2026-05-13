@@ -47,6 +47,21 @@ class ReceiptRecord:
     user_note: str | None = None
     created_at: datetime = field(default_factory=datetime.utcnow)
     ocr_provider: str | None = None
+    gross_amount: int | None = None
+    discount_amount: int | None = None
+    final_amount: int | None = None
+    paid_amount: int | None = None
+    amount_source: str | None = None
+    amount_warnings: list[str] = field(default_factory=list)
+    estimated_supply_amount: int | None = None
+    estimated_vat_amount: int | None = None
+    vat_source: str | None = None
+    vat_note: str | None = None
+    vat_warnings: list[str] = field(default_factory=list)
+    vat_review_required: bool = False
+    sensitive_text_detected: bool = False
+    sensitive_text_categories: list[str] = field(default_factory=list)
+    sensitive_warnings: list[str] = field(default_factory=list)
 
     @classmethod
     def create(
@@ -87,6 +102,21 @@ class ReceiptRecord:
         export_included: bool = True,
         user_note: str | None = None,
         ocr_provider: str | None = None,
+        gross_amount: int | None = None,
+        discount_amount: int | None = None,
+        final_amount: int | None = None,
+        paid_amount: int | None = None,
+        amount_source: str | None = None,
+        amount_warnings: list[str] | None = None,
+        estimated_supply_amount: int | None = None,
+        estimated_vat_amount: int | None = None,
+        vat_source: str | None = None,
+        vat_note: str | None = None,
+        vat_warnings: list[str] | None = None,
+        vat_review_required: bool = False,
+        sensitive_text_detected: bool = False,
+        sensitive_text_categories: list[str] | None = None,
+        sensitive_warnings: list[str] | None = None,
     ) -> "ReceiptRecord":
         clean_review_reasons = _unique(parser_warnings or []) if review_reasons is None else _unique(review_reasons)
         return cls(
@@ -126,6 +156,21 @@ class ReceiptRecord:
             export_included=export_included,
             user_note=user_note,
             ocr_provider=ocr_provider,
+            gross_amount=gross_amount,
+            discount_amount=discount_amount,
+            final_amount=final_amount,
+            paid_amount=paid_amount,
+            amount_source=amount_source,
+            amount_warnings=_unique(amount_warnings or []),
+            estimated_supply_amount=estimated_supply_amount,
+            estimated_vat_amount=estimated_vat_amount,
+            vat_source=vat_source,
+            vat_note=vat_note,
+            vat_warnings=_unique(vat_warnings or []),
+            vat_review_required=vat_review_required,
+            sensitive_text_detected=sensitive_text_detected,
+            sensitive_text_categories=_unique(sensitive_text_categories or []),
+            sensitive_warnings=_unique(sensitive_warnings or []),
         )
 
     @property
