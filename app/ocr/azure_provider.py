@@ -94,6 +94,8 @@ class AzureDocumentIntelligenceProvider(OCRProvider):
         self.config = config or get_config()
         self._validate_config()
         self.session = session or requests.Session()
+        if self.config.azure_ocr_ignore_env_proxy:
+            self.session.trust_env = False
         self.poll_interval_seconds = _positive_float(
             poll_interval_seconds,
             float(self.config.azure_ocr_default_poll_interval_seconds),
@@ -133,7 +135,12 @@ class AzureDocumentIntelligenceProvider(OCRProvider):
         except requests.exceptions.ProxyError:
             return self._failed(source_info, "OCR 요청에 실패했습니다.", "proxy_error")
         except requests.RequestException as exc:
-            return self._failed(source_info, "OCR 요청에 실패했습니다.", _request_diagnostic_code(exc))
+            return self._failed(
+                source_info,
+                "OCR 요청에 실패했습니다.",
+                _request_diagnostic_code(exc),
+                diagnostic_detail_code=_request_diagnostic_detail_code(exc),
+            )
         except ValueError:
             return self._failed(source_info, "OCR 응답을 해석할 수 없습니다.", "bad_response")
         except KeyError:
@@ -167,7 +174,7 @@ class AzureDocumentIntelligenceProvider(OCRProvider):
             ),
         )
         if response.status_code >= 400:
-            raise _http_error("analyze", response.status_code)
+            raise _http_error("analyze", response)
 
         operation_location = response.headers.get("Operation-Location")
         if not operation_location:
@@ -188,7 +195,7 @@ class AzureDocumentIntelligenceProvider(OCRProvider):
                 ),
             )
             if response.status_code >= 400:
-                raise _http_error("poll", response.status_code)
+                raise _http_error("poll", response)
             payload = response.json()
             last_payload = payload
             status = str(payload.get("status", "")).lower()
@@ -344,7 +351,14 @@ class AzureDocumentIntelligenceProvider(OCRProvider):
             "file_path": path,
         }
 
-    def _failed(self, source_info: dict[str, Any], message: str, diagnostic_code: str) -> OCRResult:
+    def _failed(
+        self,
+        source_info: dict[str, Any],
+        message: str,
+        diagnostic_code: str,
+        *,
+        diagnostic_detail_code: str | None = None,
+    ) -> OCRResult:
         return OCRResult.failed(
             source_file_id=source_info["source_file_id"],
             source_file_name=source_info["source_file_name"],
@@ -352,6 +366,7 @@ class AzureDocumentIntelligenceProvider(OCRProvider):
             provider=self.provider_name,
             error_message=message,
             diagnostic_code=diagnostic_code,
+            diagnostic_detail_code=diagnostic_detail_code,
         )
 
     def _analyze_url(self) -> str:
@@ -461,6 +476,8 @@ def _is_amount_context_line(line: str) -> bool:
 
 
 def _request_diagnostic_code(exc: requests.RequestException) -> str:
+    if isinstance(exc, _AzureHttpError):
+        return f"{exc.stage}_http_{exc.status_code}"
     message = str(exc)
     if re_match := _HTTP_DIAGNOSTIC_PATTERN.fullmatch(message):
         return f"{re_match.group('stage')}_http_{re_match.group('status')}"
@@ -469,8 +486,51 @@ def _request_diagnostic_code(exc: requests.RequestException) -> str:
     return "request_error"
 
 
-def _http_error(stage: str, status_code: int) -> requests.RequestException:
-    return requests.RequestException(f"{stage}_http_{status_code}")
+def _request_diagnostic_detail_code(exc: requests.RequestException) -> str | None:
+    if isinstance(exc, _AzureHttpError):
+        return exc.detail_code
+    return None
+
+
+class _AzureHttpError(requests.RequestException):
+    def __init__(self, stage: str, status_code: int, detail_code: str | None = None) -> None:
+        super().__init__(f"{stage}_http_{status_code}")
+        self.stage = stage
+        self.status_code = status_code
+        self.detail_code = detail_code
+
+
+def _http_error(stage: str, response: requests.Response) -> requests.RequestException:
+    return _AzureHttpError(stage, response.status_code, _safe_http_error_detail_code(response))
+
+
+def _safe_http_error_detail_code(response: requests.Response) -> str | None:
+    try:
+        payload = response.json()
+    except ValueError:
+        return "non_json_error"
+    if not isinstance(payload, dict):
+        return "unexpected_error_shape"
+    error = payload.get("error")
+    if not isinstance(error, dict):
+        return "unexpected_error_shape"
+    raw_code = _safe_code_token(error.get("code"))
+    message = str(error.get("message") or "").lower()
+    if any(token in message for token in ("quota", "exceed", "limit", "rate")):
+        return "quota_or_rate_limit"
+    if any(token in message for token in ("key", "credential", "permission", "access", "denied")):
+        return "credential_or_permission"
+    if any(token in message for token in ("region", "location")):
+        return "region_or_endpoint"
+    return raw_code or "http_error"
+
+
+def _safe_code_token(value: object) -> str | None:
+    text = str(value or "").strip().lower()
+    if not text:
+        return None
+    safe = "".join(character for character in text if character.isalnum() or character in {"_", "-"})
+    return safe[:80] or None
 
 
 def _retry_after_seconds(response: requests.Response) -> float | None:

@@ -17,6 +17,7 @@ DEFAULT_AZURE_OCR_DEFAULT_POLL_INTERVAL_SECONDS = 1
 DEFAULT_AZURE_OCR_MAX_POLL_INTERVAL_SECONDS = 10
 DEFAULT_AZURE_OCR_MAX_POLL_ATTEMPTS = 30
 DEFAULT_AZURE_OCR_MAX_RETRIES = 3
+DEFAULT_AZURE_OCR_IGNORE_ENV_PROXY = False
 DEFAULT_APP_DB_PATH = Path("data/app.db")
 DEFAULT_OUTPUT_ROOT = Path("data/outputs")
 DEFAULT_UPLOAD_RETENTION_DAYS = 7
@@ -45,6 +46,7 @@ class AppConfig:
     azure_ocr_max_poll_interval_seconds: int = DEFAULT_AZURE_OCR_MAX_POLL_INTERVAL_SECONDS
     azure_ocr_max_poll_attempts: int = DEFAULT_AZURE_OCR_MAX_POLL_ATTEMPTS
     azure_ocr_max_retries: int = DEFAULT_AZURE_OCR_MAX_RETRIES
+    azure_ocr_ignore_env_proxy: bool = DEFAULT_AZURE_OCR_IGNORE_ENV_PROXY
 
 
 def get_config() -> AppConfig:
@@ -95,6 +97,10 @@ def get_config() -> AppConfig:
         azure_ocr_max_retries=_positive_int_env(
             "AZURE_OCR_MAX_RETRIES",
             DEFAULT_AZURE_OCR_MAX_RETRIES,
+        ),
+        azure_ocr_ignore_env_proxy=_bool_env(
+            "AZURE_OCR_IGNORE_ENV_PROXY",
+            DEFAULT_AZURE_OCR_IGNORE_ENV_PROXY,
         ),
     )
 

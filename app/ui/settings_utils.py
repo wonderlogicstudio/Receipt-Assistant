@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Iterable, Mapping
 
 from app.core.config import AppConfig
+from app.core.standard_ocr import StandardOCRResult
 from app.history.job_service import JobHistoryService
 from app.ui.history_utils import format_history_datetime
 
@@ -25,6 +26,25 @@ def build_ocr_settings_summary(config: AppConfig) -> dict[str, object]:
         "Azure endpoint": mask_sensitive_value(config.azure_document_intelligence_endpoint),
         "Azure model": config.azure_document_intelligence_model_id,
         "API version": config.azure_document_intelligence_api_version,
+        "Azure ignore env proxy": bool(config.azure_ocr_ignore_env_proxy),
+    }
+
+
+def build_paddle_smoke_result_summary(result: StandardOCRResult) -> dict[str, object]:
+    warning_codes = ", ".join(str(item) for item in result.warnings[:5]) or "-"
+    return {
+        "provider": result.provider,
+        "status": result.status,
+        "diagnostic_code": result.diagnostic_code or "-",
+        "diagnostic_detail_code": result.provider_fields.get("diagnostic_detail_code", "-"),
+        "engine_runtime": result.engine_runtime or "-",
+        "provider_family": result.provider_fields.get("provider_family", "-"),
+        "input_type": result.provider_fields.get("input_type", "-"),
+        "text_block_count": len(result.text_blocks),
+        "key_value_candidate_count": len(result.key_value_candidates),
+        "table_candidate_count": len(result.table_candidates),
+        "warning_count": len(result.warnings),
+        "warning_codes": warning_codes,
     }
 
 

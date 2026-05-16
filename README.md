@@ -66,6 +66,12 @@ pip install -r requirements.txt
 streamlit run app/main.py
 ```
 
+Windows 개발/진단 중에는 기존 Streamlit 서버가 같은 포트에 남아 예전 코드로 OCR smoke test가 반복 실행될 수 있습니다. 이 경우 아래 스크립트를 사용하면 `8501` 포트의 오래된 Python/Streamlit 서버를 먼저 정리한 뒤 앱을 새로 실행합니다.
+
+```powershell
+.\scripts\run_app.ps1
+```
+
 앱 메뉴:
 
 - `새 작업`: 업로드, 처리, 검수, 엑셀 생성/다운로드
@@ -87,6 +93,8 @@ CLEANUP_DRY_RUN_DEFAULT=true
 ```
 
 Azure OCR을 사용할 때만 별도 provider 설정과 key를 `.env`에 넣습니다. 실제 key는 코드나 문서에 적지 않습니다. `.env`는 Git에 올리지 않습니다.
+
+Azure 실행에서 `proxy_error`가 반복되면 로컬 `HTTP_PROXY`/`HTTPS_PROXY` 환경변수를 타고 실패하는 상황일 수 있습니다. 직접 Azure endpoint에 접근 가능한 환경이라면 `.env`에 `AZURE_OCR_IGNORE_ENV_PROXY=true`를 설정해 Azure 요청에서 환경 프록시를 무시할 수 있습니다.
 
 ## 테스트 실행 방법
 
@@ -136,3 +144,83 @@ python -m pytest tests/test_settings_utils.py
 - [인터뷰 질문지](docs/interview_questions.md)
 - [샘플 사용자 흐름](docs/sample_user_flow.md)
 - [파일럿 피드백 템플릿](docs/pilot_feedback_template.md)
+
+## 후속 OCR Provider 확장 방향
+
+현재 기본 MVP 실행 방법은 그대로 유지합니다. `StandardOCRResult`는 Azure, PaddleOCR, Tesseract, Android ML Kit, iOS Apple Vision, Mock OCR 같은 후속 OCR Provider 확장을 위한 내부 표준입니다.
+
+PaddleOCR Local Provider는 9주차 PoC 후보로 추가되었지만 기본 실행 요구사항은 아닙니다. Tesseract Provider와 Mobile OCR Adapter는 후속 계획입니다. OCR Provider가 늘어나도 Parser, Validator, CategoryRules, CardMatcher, ExcelExporter, 처리 이력 흐름은 `StandardOCRResult`를 기준으로 하나로 유지하는 방향입니다.
+
+6주차 작업은 표준 계약과 fixture 전략을 정의하는 문서 보완 단계였습니다. PaddleOCR은 9주차 이미지 기준 PoC 후보로 분리되었고, Tesseract Provider, 모바일 앱, Provider 변경 UI는 아직 후속 범위입니다.
+
+## 9주차 PaddleOCR Local Provider PoC 안내
+
+기본 개발과 테스트는 계속 `OCR_PROVIDER=mock` 기준입니다. `OCR_PROVIDER=paddle`은 9주차 Local OCR PoC 후보이며, 현재 optional `PaddleOCRProvider`와 opt-in smoke test scaffold가 추가되어 있습니다.
+
+PaddleOCR 관련 원칙:
+
+- `paddleocr`가 설치되지 않은 환경에서도 기본 `python -m pytest`는 통과해야 합니다.
+- 실제 PaddleOCR 실행은 별도 설치와 opt-in 테스트가 필요하며 기본 pytest에 포함하지 않습니다.
+- 9주차 PoC는 이미지 파일 기준으로 제한하고, PDF 처리는 후속 작업으로 분리합니다.
+- PaddleOCR Provider가 추가되더라도 Parser 이후 흐름은 `StandardOCRResult`와 기존 `ReceiptRecord` 기반으로 유지합니다.
+- PaddleOCR raw output 전체, OCR raw text 전체, 전체 로컬 절대경로, 실제 고객 파일은 DB/화면/엑셀/로그/fixture에 남기지 않습니다.
+### 9주차-D PaddleOCR opt-in smoke test
+
+기본 회귀 테스트는 계속 아래 명령만으로 실행합니다.
+
+```bash
+python -m pytest
+```
+
+실제 PaddleOCR 이미지 smoke test는 명시적으로 opt-in할 때만 실행합니다.
+
+```powershell
+$env:RUN_PADDLEOCR_TESTS = "1"
+$env:PADDLEOCR_TEST_IMAGE_PATH = "<local-safe-sample-image>"
+python -m pytest tests/integration/test_paddle_ocr_provider_smoke.py
+```
+
+- smoke test는 OCR 품질 평가가 아니라 `PaddleOCRProvider` 실행 경로가 `StandardOCRResult`로 안전하게 끝나는지 확인하는 용도입니다.
+- 테스트 이미지는 저장소에 커밋하지 말고, 합성 이미지 또는 비민감 샘플만 사용합니다.
+- 결과를 공유할 때는 파일명만 기록하고 전체 로컬 경로는 기록하지 않습니다.
+- PDF는 아직 PaddleOCR smoke test 범위가 아니며 unsupported/deferred 상태를 유지합니다.
+
+### 9주차-C Optional PaddleOCRProvider 후보
+
+- `OCR_PROVIDER=paddle` 후보가 추가되었지만 기본 개발/테스트 provider는 변경되지 않았습니다.
+- `OCR_PROVIDER=paddleocr` alias도 같은 optional provider 후보로 취급합니다.
+- `PaddleOCRProvider`는 `StandardOCRResult`를 반환하며 `PaddleStandardOCRAdapter`를 통해 결과를 정규화합니다.
+- `paddleocr` 패키지는 필수 의존성이 아니며, 설치되지 않은 환경에서도 provider import와 기본 `python -m pytest`가 통과해야 합니다.
+- `paddleocr` 미설치 상태에서 `extract()`를 호출하면 raw traceback 대신 `paddle_not_installed` 계열 diagnostic code가 있는 failed result를 반환할 수 있습니다.
+- PDF 입력은 아직 지원하지 않으며 `paddle_pdf_not_supported` 계열의 deferred/failed result로 처리합니다.
+- 실제 이미지 OCR smoke test는 9주차-D에서 opt-in 방식으로 분리합니다.
+
+## 10주차 Azure vs PaddleOCR 품질 비교 안내
+
+10주차-A는 품질 비교 계약과 문서 보완 단계입니다. 이후 10주차-B 안전한 OCR 미리보기와 10주차-C side-by-side 비교 리포트가 Settings 진단 흐름에 구현되었습니다. 통계 요약, formal `field_match_score`, Azure fallback 정책/자동화는 10주차-D 범위로 남겨둡니다.
+
+비교 기준은 Provider raw output이 아니라 `StandardOCRResult`, `StandardOCRParserContext`, 기존 `ReceiptRecord`입니다. 비교 리포트에는 파일명, 상태 코드, 후보 수, 검토 필요 사유, 핵심 필드 일치 여부 같은 비민감 요약만 남기며 OCR raw text 전체, raw JSON 전체, 전체 로컬 절대경로, 실제 고객 파일은 포함하지 않습니다.
+
+Expected fixture는 실제 OCR raw output이나 실제 고객 파일이 아니라 합성/비민감 샘플의 `ReceiptRecord` 핵심 필드 기준선으로 둡니다. PDF PaddleOCR fixture와 통계/정책 집계는 후속 단계입니다.
+
+자세한 계약은 [Azure vs PaddleOCR 품질 비교 계약](docs/ocr_quality_comparison_contract.md)을 기준으로 합니다.
+### Week 10-B Safe OCR Preview
+
+10-B adds a safe OCR preview for the PaddleOCR smoke-test path. The preview is built only from `StandardOCRResult.text_blocks`, shows a limited number of rows, includes confidence and low-confidence flags, and keeps sensitive lines as `[REDACTED]`.
+
+The same preview utility is provider-neutral, so Azure adapter output can use it later through `StandardOCRResult` without passing Azure raw JSON or PaddleOCR raw output into the UI. This step does not add side-by-side reports, statistics summaries, `field_match_score`, automatic Azure fallback, default provider changes, ExcelExporter changes, Processing History schema changes, or PDF PaddleOCR handling.
+### Week 10-C Side-by-side Comparison Report
+
+Week 10-C adds an explicit settings-screen diagnostic for comparing one non-sensitive sample image through Azure and PaddleOCR. The report follows the Week 10-A contract:
+
+`Provider execution -> StandardOCRResult -> StandardOCRParserContext -> ReceiptParser.parse_standard_context() -> ReceiptRecord -> side-by-side comparison report`
+
+The comparison shows provider-level per-sample metrics and core parsed receipt fields side by side. It does not store or display provider raw output, full OCR text, raw JSON, full local paths, Azure endpoint URLs, operation URLs, secrets, or raw tracebacks. Week 10-B safe preview remains available for OCR text block preview, and Week 10-C does not change the default production provider flow.
+
+The report also shows per-field match status (`matched`, `mismatched`, `azure_only`, `paddle_only`, `both_missing`) and a per-sample field match summary for manual review. These are diagnostic flags only; Week 10-C still does not calculate a formal score or fallback recommendation.
+
+Azure failures may include a sanitized `diagnostic_detail_code`, for example `quota_or_rate_limit` for an HTTP 403 quota/rate-limit response. Raw Azure error messages, endpoint URLs, operation URLs, keys, request IDs, and tracebacks are not displayed.
+
+PaddleOCR now generates only conservative candidate hints from safe OCR lines: obvious dates, business numbers, payment methods, and labeled amounts. It does not guess merchant names or infer totals from unlabeled maximum amounts.
+
+Week 10-D remains the future step for statistics aggregation, average processing time, failure rate, field match-rate summaries, formal field match scoring, and Azure fallback policy rules. These are not automated by the Week 10-C report.

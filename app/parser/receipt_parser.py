@@ -9,6 +9,7 @@ from app.classifier.merchant_dictionary import find_merchant_by_business_number
 from app.core.enums import EvidenceType, OCRStatus, ReviewStatus
 from app.core.ocr_models import OCRResult
 from app.core.receipt_models import ReceiptRecord
+from app.core.standard_ocr import StandardOCRResult, assert_no_forbidden_ocr_payload
 from app.parser.normalizers import (
     calculate_estimated_vat_amounts,
     is_overlay_text,
@@ -19,6 +20,10 @@ from app.parser.normalizers import (
     normalize_date,
     normalize_discount_amount,
     normalize_merchant_name,
+)
+from app.parser.standard_ocr_context import (
+    StandardOCRParserContext,
+    build_parser_context_from_standard_ocr,
 )
 from app.security.sensitive_filter import detect_sensitive_text, sanitize_lines_for_parsing
 
@@ -229,6 +234,85 @@ class ReceiptParser:
         )
         return self.parse(result)
 
+    def parse_standard_context(
+        self,
+        context: StandardOCRParserContext,
+        *,
+        source_file_id: str | None = None,
+        source_file_name: str | None = None,
+        ocr_provider: str | None = None,
+        confidence: float | None = None,
+    ) -> ReceiptRecord:
+        assert_no_forbidden_ocr_payload(context.model_dump(mode="json"))
+        safe_context_text = sanitize_lines_for_parsing("\n".join(context.safe_text_lines))
+        context_json = _context_candidate_json(context)
+        fields = self._extract_fields(safe_context_text, context_json)
+
+        _apply_standard_context_candidates(fields, context)
+        _apply_standard_context_amounts(fields, context)
+        _apply_standard_context_vat(fields, context)
+
+        sensitive_categories = _safe_context_categories(context.sensitive_categories)
+        sensitive_warnings = ["sensitive_text_category_detected"] if sensitive_categories else []
+        warnings = _standard_context_parser_warnings(fields, context, sensitive_categories)
+        review_status = ReviewStatus.PENDING.value if not warnings else ReviewStatus.NEEDS_REVIEW.value
+        review_reason = self._review_reason(warnings)
+        display_file_name = _display_file_name(source_file_name or context.source_file_name or "standard_ocr_context")
+
+        return ReceiptRecord.create(
+            session_id=None,
+            source_file_id=source_file_id or "standard-ocr-context-source",
+            ocr_result_id=None,
+            source_file_name=display_file_name,
+            stored_relative_path=None,
+            evidence_type=_evidence_type_for_source_file(display_file_name, bool(safe_context_text)),
+            transaction_date=fields["transaction_date"],
+            merchant_name=fields["merchant_name"],
+            business_number=fields["business_number"],
+            total_amount=fields["total_amount"],
+            supply_amount=fields["supply_amount"],
+            vat_amount=fields["vat_amount"],
+            payment_method=fields["payment_method"],
+            expense_category=None,
+            review_status=review_status,
+            review_reason=review_reason,
+            confidence=confidence,
+            parser_warnings=warnings,
+            ocr_provider=ocr_provider or context.provider,
+            gross_amount=fields["gross_amount"],
+            discount_amount=fields["discount_amount"],
+            final_amount=fields["final_amount"],
+            paid_amount=fields["paid_amount"],
+            amount_source=fields["amount_source"],
+            amount_warnings=fields["amount_warnings"],
+            estimated_supply_amount=fields["estimated_supply_amount"],
+            estimated_vat_amount=fields["estimated_vat_amount"],
+            vat_source=fields["vat_source"],
+            vat_note=fields["vat_note"],
+            vat_warnings=fields["vat_warnings"],
+            vat_review_required=fields["vat_review_required"],
+            sensitive_text_detected=bool(sensitive_categories),
+            sensitive_text_categories=sensitive_categories,
+            sensitive_warnings=sensitive_warnings,
+            approval_number=_first_context_value(context.non_amount_candidate_map, "approval_number"),
+        )
+
+    def parse_from_standard_ocr(
+        self,
+        result: StandardOCRResult,
+        *,
+        source_file_id: str | None = None,
+        source_file_name: str | None = None,
+    ) -> ReceiptRecord:
+        context = build_parser_context_from_standard_ocr(result)
+        return self.parse_standard_context(
+            context,
+            source_file_id=source_file_id or result.source_file_id,
+            source_file_name=source_file_name or result.source_file_name,
+            ocr_provider=result.provider,
+            confidence=result.confidence,
+        )
+
     def _extract_fields(self, raw_text: str, raw_json: dict[str, Any]) -> dict[str, Any]:
         transaction_date = normalize_date(
             raw_json.get("transaction_date")
@@ -298,6 +382,211 @@ class ReceiptParser:
         if not warnings:
             return "사용자 검수 대기"
         return "; ".join(warnings)
+
+
+def _context_candidate_json(context: StandardOCRParserContext) -> dict[str, Any]:
+    allowed_keys = {
+        "merchant_name",
+        "transaction_date",
+        "business_number",
+        "payment_method",
+        "approval_number",
+        "total_amount",
+        "gross_amount",
+        "discount_amount",
+        "final_amount",
+        "paid_amount",
+        "supply_amount",
+        "vat_amount",
+    }
+    candidate_json: dict[str, Any] = {}
+    for key in allowed_keys:
+        value = _first_context_value(context.candidate_map, key)
+        if value is not None:
+            candidate_json[key] = value
+    assert_no_forbidden_ocr_payload(candidate_json)
+    return candidate_json
+
+
+def _apply_standard_context_candidates(fields: dict[str, Any], context: StandardOCRParserContext) -> None:
+    transaction_date = normalize_date(_first_context_value(context.candidate_map, "transaction_date"))
+    merchant_name = normalize_merchant_name(_first_context_value(context.candidate_map, "merchant_name"))
+    business_number_candidate = _first_context_value(context.non_amount_candidate_map, "business_number") or _first_context_value(
+        context.candidate_map,
+        "business_number",
+    )
+    business_number = normalize_business_number(business_number_candidate)
+    payment_method = normalize_merchant_name(_first_context_value(context.candidate_map, "payment_method"))
+
+    fields["transaction_date"] = transaction_date or fields["transaction_date"]
+    fields["merchant_name"] = merchant_name or fields["merchant_name"]
+    fields["business_number_candidate"] = business_number_candidate or fields["business_number_candidate"]
+    fields["business_number"] = business_number or fields["business_number"]
+    fields["payment_method"] = payment_method or fields["payment_method"]
+
+
+def _apply_standard_context_amounts(fields: dict[str, Any], context: StandardOCRParserContext) -> None:
+    gross_amount = _context_amount(context, "gross_amount")
+    discount_amount = _context_amount(context, "discount_amount", discount=True)
+    final_amount = _context_amount(context, "final_amount")
+    paid_amount = _context_amount(context, "paid_amount")
+    total_amount = _context_amount(context, "total_amount")
+
+    if gross_amount is not None:
+        fields["gross_amount"] = gross_amount
+    if discount_amount is not None:
+        fields["discount_amount"] = discount_amount
+    if final_amount is not None:
+        fields["final_amount"] = final_amount
+    if paid_amount is not None:
+        fields["paid_amount"] = paid_amount
+
+    gross_minus_discount = None
+    if fields["gross_amount"] is not None and fields["discount_amount"] is not None:
+        gross_minus_discount = max(fields["gross_amount"] - fields["discount_amount"], 0)
+
+    amount_warnings: list[str] = list(fields.get("amount_warnings", []))
+    if fields["discount_amount"] is not None and fields["discount_amount"] > 0:
+        amount_warnings.append("discount_detected")
+    if fields["final_amount"] is not None and fields["paid_amount"] is not None and fields["final_amount"] != fields["paid_amount"]:
+        amount_warnings.append("final_paid_amount_mismatch")
+
+    if total_amount is not None:
+        fields["total_amount"] = total_amount
+        fields["amount_source"] = "total_amount"
+    else:
+        chosen_total, amount_source = _choose_total_amount(
+            paid_amount=fields["paid_amount"],
+            payment_target_amount=None,
+            final_amount=fields["final_amount"],
+            gross_minus_discount=gross_minus_discount,
+            gross_amount=fields["gross_amount"],
+        )
+        fields["total_amount"] = chosen_total
+        fields["amount_source"] = amount_source
+        if chosen_total is None:
+            amount_warnings.append("amount_source_low_confidence")
+
+    if fields["total_amount"] == 0 and fields["discount_amount"] is not None and fields["discount_amount"] > 0:
+        amount_warnings.append("zero_payment_after_discount")
+    fields["amount_warnings"] = _unique(amount_warnings)
+
+
+def _apply_standard_context_vat(fields: dict[str, Any], context: StandardOCRParserContext) -> None:
+    supply_amount = _context_amount(context, "supply_amount")
+    vat_amount = _context_amount(context, "vat_amount")
+    vat_review_hint = _context_has_vat_review_hint(context)
+
+    if supply_amount is not None:
+        fields["supply_amount"] = supply_amount
+    if vat_amount is not None:
+        fields["vat_amount"] = vat_amount
+        fields["estimated_supply_amount"] = None
+        fields["estimated_vat_amount"] = None
+        fields["vat_source"] = "explicit"
+        fields["vat_note"] = "영수증에 부가세가 명시되어 있음"
+        fields["vat_review_required"] = bool(vat_review_hint)
+        fields["vat_warnings"] = _unique(list(fields.get("vat_warnings", [])) + (["vat_review_hint"] if vat_review_hint else []))
+        return
+
+    total_amount = fields["total_amount"]
+    vat_warnings = list(fields.get("vat_warnings", []))
+    if vat_review_hint:
+        vat_warnings.append("vat_review_hint")
+        vat_warnings.append("vat_not_explicit")
+    if total_amount is not None and total_amount > 0:
+        estimated_supply, estimated_vat = calculate_estimated_vat_amounts(total_amount)
+        fields["estimated_supply_amount"] = estimated_supply
+        fields["estimated_vat_amount"] = estimated_vat
+        fields["vat_source"] = "estimated_reference"
+        fields["vat_note"] = "부가세 미표기, 참고용 역산값"
+        vat_warnings.append("vat_estimated_reference_only")
+        fields["vat_review_required"] = True
+    elif total_amount == 0:
+        fields["estimated_supply_amount"] = None
+        fields["estimated_vat_amount"] = None
+        fields["vat_source"] = "zero_amount"
+        fields["vat_note"] = "총액 0원으로 부가세 참고 추정 생략"
+        vat_warnings.append("vat_estimate_skipped_zero_amount")
+        fields["vat_review_required"] = bool(vat_review_hint)
+    else:
+        fields["vat_review_required"] = True
+    fields["vat_amount"] = None
+    fields["vat_warnings"] = _unique(vat_warnings)
+
+
+def _standard_context_parser_warnings(
+    fields: dict[str, Any],
+    context: StandardOCRParserContext,
+    sensitive_categories: list[str],
+) -> list[str]:
+    warnings: list[str] = list(fields.get("parser_warnings", []))
+    if context.status != "completed":
+        warnings.append(_safe_warning_text(f"ocr_status:{context.status}"))
+    if context.diagnostic_code:
+        warnings.append(_safe_warning_text(f"diagnostic_code:{context.diagnostic_code}"))
+    if fields["transaction_date"] is None:
+        warnings.append("date_missing")
+    if not fields["merchant_name"]:
+        warnings.append("merchant_name_missing_or_low_confidence")
+    if fields["total_amount"] is None:
+        warnings.append("amount_missing")
+    if fields["business_number_candidate"] and fields["business_number"] is None:
+        warnings.append("business_number_format_review_required")
+    if fields.get("vat_review_required"):
+        warnings.append("vat_review_required")
+    warnings.extend(fields.get("amount_warnings", []))
+    warnings.extend(fields.get("vat_warnings", []))
+    warnings.extend(_safe_warning_text(hint) for hint in context.review_hints)
+    if sensitive_categories:
+        warnings.append("sensitive_text_category_detected")
+    return _unique([_safe_warning_text(warning) for warning in warnings])
+
+
+def _context_amount(context: StandardOCRParserContext, candidate_type: str, *, discount: bool = False) -> int | None:
+    value = _first_context_value(context.amount_candidate_map, candidate_type)
+    if value is None:
+        return None
+    if discount:
+        return normalize_discount_amount(value)
+    return normalize_amount(value)
+
+
+def _first_context_value(candidate_map: dict[str, list[str]], *candidate_types: str) -> str | None:
+    for candidate_type in candidate_types:
+        for value in candidate_map.get(candidate_type, []):
+            text = str(value or "").strip()
+            if text:
+                return text
+    return None
+
+
+def _context_has_vat_review_hint(context: StandardOCRParserContext) -> bool:
+    if "vat_missing" in context.non_amount_candidate_map or "vat_review_hint" in context.non_amount_candidate_map:
+        return True
+    return any(
+        hint.startswith("vat_missing") or hint.startswith("vat_review_hint")
+        for hint in context.review_hints
+    )
+
+
+def _safe_context_categories(categories: list[str]) -> list[str]:
+    return _unique([_safe_warning_text(category) for category in categories])
+
+
+def _safe_warning_text(value: object) -> str:
+    text = str(value or "")
+    replacements = {
+        "api_key": "api-key",
+        "operation_location": "operation-location",
+        "endpoint": "service-url",
+        "password": "credential",
+        "secret": "redacted-secret",
+        "token": "redacted-token",
+    }
+    for source, replacement in replacements.items():
+        text = re.sub(source, replacement, text, flags=re.IGNORECASE)
+    return text
 
 
 DATE_PATTERN = r"\d{4}[-./]?\d{2}[-./]?\d{2}(?:\s+\d{1,2}:\d{2}(?::\d{2})?)?"
@@ -1337,6 +1626,17 @@ def _evidence_type_for(ocr_result: OCRResult) -> str:
     if suffix in {".jpg", ".jpeg", ".png"}:
         return EvidenceType.RECEIPT_IMAGE.value
     if ocr_result.raw_text:
+        return EvidenceType.OCR_TEXT.value
+    return EvidenceType.MANUAL.value
+
+
+def _evidence_type_for_source_file(source_file_name: str, has_text: bool) -> str:
+    suffix = Path(source_file_name).suffix.lower()
+    if suffix == ".pdf":
+        return EvidenceType.RECEIPT_PDF.value
+    if suffix in {".jpg", ".jpeg", ".png"}:
+        return EvidenceType.RECEIPT_IMAGE.value
+    if has_text:
         return EvidenceType.OCR_TEXT.value
     return EvidenceType.MANUAL.value
 

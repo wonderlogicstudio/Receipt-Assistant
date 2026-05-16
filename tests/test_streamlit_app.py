@@ -4,8 +4,10 @@ from app.storage.file_store import StoredFileMetadata
 from app.core.ocr_models import OCRResult
 from app.ui.streamlit_app import (
     PREVIEW_COLUMNS,
+    build_runtime_ocr_config,
     format_ocr_diagnostic,
     receipts_to_preview_dataframe,
+    resolve_runtime_ocr_provider_name,
     should_disable_process_button,
     stored_files_to_dataframe,
 )
@@ -63,3 +65,15 @@ def test_should_disable_process_button_when_empty_or_processing():
     assert should_disable_process_button(None, is_processing=False) is True
     assert should_disable_process_button([object()], is_processing=True) is True
     assert should_disable_process_button([object()], is_processing=False) is False
+
+
+def test_runtime_ocr_provider_selection_resolves_current_or_safe_override(monkeypatch):
+    assert resolve_runtime_ocr_provider_name("__current__", "azure") == "azure"
+    assert resolve_runtime_ocr_provider_name("mock", "azure") == "mock"
+    assert resolve_runtime_ocr_provider_name("azure", "mock") == "azure"
+    assert resolve_runtime_ocr_provider_name("paddle", "azure") == "azure"
+
+    monkeypatch.setenv("OCR_PROVIDER", "azure")
+    config = build_runtime_ocr_config("mock")
+
+    assert config.ocr_provider == "mock"

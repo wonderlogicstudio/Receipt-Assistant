@@ -94,6 +94,60 @@
 4. 엑셀 생성은 `app/exporter/` 아래 둔다.
 5. 테스트는 기능별로 `tests/` 아래 둔다.
 
+OCR Provider 확장 규칙:
+
+1. 모든 OCR Provider 작업은 `StandardOCRResult` 계약을 따라야 한다.
+2. Provider raw response를 Parser, Validator, Exporter로 직접 넘기지 않는다.
+3. Parser는 provider SDK나 provider raw JSON 구조를 import하지 않는다.
+4. OCR Adapter는 provider raw response를 `StandardOCRResult`로 변환하는 책임만 가진다.
+5. `ReceiptRecord`와 `ExcelExporter`는 기존 MVP 산출물과 호환되도록 유지한다.
+6. 새 Provider를 추가할 때는 fixture와 테스트를 함께 추가한다.
+7. OCR raw text 전체와 raw JSON 전체를 print/logger/DB/엑셀/화면에 남기지 않는다.
+8. `schema_version`, `parser_version`, `validator_version` 변경 시 SPEC.md와 CHECKLIST.md를 함께 업데이트한다.
+9. Provider Adapter 작업 전에는 `app/core/standard_ocr.py` 모델과 `tests/fixtures/standard_ocr/` fixture를 먼저 확인한다.
+10. Parser 전환 작업 시 `StandardOCRParserContext`를 우선 확인한다.
+11. Provider raw response를 Parser로 넘기는 변경은 금지한다.
+12. Parser 전환은 end-to-end 테스트와 ExcelExporter 회귀 테스트를 통과해야 한다.
+13. raw text/raw JSON 전체 노출을 디버깅 목적으로도 추가하지 않는다.
+14. 기존 raw_text Parser 경로를 제거하기 전 compatibility wrapper와 회귀 테스트를 준비한다.
+15. Provider Adapter 작업은 Parser 변경과 분리해서 진행한다.
+16. Azure 관련 작업 시 Azure raw response를 Parser로 직접 넘기지 않는다.
+17. Azure SDK response object를 Parser, Validator, Exporter에서 import하지 않는다.
+18. Azure Adapter는 `StandardOCRResult`를 반환하는 별도 계층으로 둔다.
+19. `provider_fields`는 비민감 metadata와 adapter 진단 요약만 담는다.
+20. `provider_fields`를 raw JSON 저장소처럼 사용하지 않는다.
+21. Azure endpoint 전체 URL, API key, `operation_location` 전체 URL을 로그/화면/테스트 fixture에 남기지 않는다.
+22. Azure Provider 동작 변경과 Parser 전환은 한 작업에서 동시에 하지 않는다.
+23. Adapter 구현, Provider 연결, Parser 전환은 별도 작업으로 진행한다.
+24. Azure Adapter 작업 후 compileall, pytest, StandardOCR 관련 테스트, end-to-end export flow 테스트를 실행한다.
+25. Azure Adapter 단위 테스트에서는 실제 Azure API를 호출하지 않는다.
+26. Azure Adapter fixture에는 실제 Azure raw JSON 전체나 실제 고객 파일을 넣지 않는다.
+27. AzureStandardOCRAdapter 추가만으로 기존 `AzureProvider.extract()` 반환값을 바꾸지 않는다.
+28. Azure Adapter를 구현했더라도 기존 `AzureProvider.extract()` 반환값을 임의로 변경하지 않는다.
+29. 실제 Azure API 호출 테스트를 기본 pytest에 넣지 않는다.
+30. Azure key가 없어도 기본 테스트가 통과해야 한다.
+31. Adapter output을 Parser에 직접 연결하기 전 `StandardOCRParserContext` 테스트를 먼저 통과해야 한다.
+32. 8주차 Parser 전환 전에는 Azure Provider regression test, Adapter test, parser context test, end-to-end export flow test를 확인한다.
+33. `provider_fields`를 Parser context로 그대로 전달하지 않는다.
+34. Parser 작업 시 provider raw response를 직접 받는 코드를 추가하지 않는다.
+35. Azure/PaddleOCR/Tesseract/ML Kit/Apple Vision SDK 객체를 `ReceiptParser`에서 import하지 않는다.
+36. Parser 표준 입력은 `StandardOCRParserContext`를 우선 사용한다.
+37. 기존 raw_text Parser 경로는 즉시 삭제하지 않는다.
+38. Parser 전환 시 `ReceiptRecord`와 `ExcelExporter` 구조를 대규모로 바꾸지 않는다.
+39. Parser entry 추가, fixture 비교 테스트, downstream 회귀 점검은 별도 단계로 진행한다.
+40. Parser 전환 작업 후 standard OCR tests, azure adapter tests, parser tests, validator tests, exporter tests, end-to-end export flow tests를 실행한다.
+41. raw text/raw JSON 전체를 디버깅 목적으로 print/logger에 남기지 않는다.
+42. Provider raw response를 Parser로 전달하는 코드를 발견하면 변경을 중단하고 보고한다.
+43. PaddleOCR 작업 시 PaddleOCR raw output을 Parser, Validator, CategoryRules, CardMatcher, ExcelExporter로 직접 넘기지 않는다.
+44. `PaddleOCRProvider`는 `StandardOCRResult`를 반환해야 한다.
+45. `paddleocr` import는 lazy import로 처리하고, paddleocr 미설치 환경에서도 기본 pytest가 통과해야 한다.
+46. 실제 PaddleOCR OCR 테스트는 opt-in으로 분리하고, 기본 테스트에서 모델 다운로드나 네트워크 호출이 발생하지 않게 한다.
+47. PDF 처리는 9주차 PaddleOCR PoC 범위가 아니며 후속 작업으로 분리한다.
+48. PaddleOCRProvider 작업 중 ReceiptParser, Validator, ExcelExporter, Processing History를 동시에 변경하지 않는다.
+49. PaddleOCR raw output 전체, OCR raw text 전체, 전체 로컬 절대경로를 로그, fixture, DB, 엑셀, 화면, 테스트 출력에 남기지 않는다.
+50. 9주차-B는 adapter/fixture only, 9주차-C는 optional provider, 9주차-D는 opt-in smoke test로 분리한다.
+51. 10주차 품질 비교는 `StandardOCRResult`/`StandardOCRParserContext`/`ReceiptRecord` 기준으로 수행하고 raw output 기준으로 비교하지 않는다.
+
 ---
 
 ## 6. Commands
@@ -207,3 +261,19 @@ chore: initialize project structure
 7. 남은 리스크
 8. 추천 커밋 메시지
 ```
+## Week 9-C Optional PaddleOCRProvider Agent Addendum
+
+- PaddleOCRProvider work may add a provider factory candidate, but it must not change the default provider.
+- Do not top-level import `paddleocr`; use lazy import inside the provider execution path.
+- Missing `paddleocr` must be handled with a non-sensitive `StandardOCRResult` diagnostic instead of breaking default pytest.
+- Do not add real OCR smoke tests to default pytest; keep them opt-in for 9-D.
+- Do not add PDF conversion, image fixtures, customer files, or `requirements.txt` OCR dependencies in 9-C.
+
+## Week 9-D Opt-In PaddleOCR Smoke Test Agent Addendum
+
+- Real PaddleOCR smoke tests must be opt-in only and skipped by default pytest.
+- Do not print or report full local image paths; use file names only.
+- Do not commit real customer images or real OCR raw output.
+- Keep PDF handling unsupported/deferred in 9-D.
+- Classify smoke test failures as environment, provider, security, or quality failures.
+- Keep Azure vs PaddleOCR quality comparison as a separate 10-week task.

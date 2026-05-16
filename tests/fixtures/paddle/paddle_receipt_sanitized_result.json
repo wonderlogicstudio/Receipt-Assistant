@@ -1,0 +1,134 @@
+{
+  "id": "paddle-sample-001",
+  "engine": "paddleocr",
+  "engine_version": "test",
+  "status": "succeeded",
+  "language_hint": "ko",
+  "input_type": "image",
+  "image_count": 1,
+  "has_angle_classifier": true,
+  "has_gpu": false,
+  "confidence": 0.94,
+  "created_at": "2026-05-15T09:00:00+09:00",
+  "pages": [
+    {
+      "page_index": 0,
+      "width": 1080,
+      "height": 1920,
+      "unit": "pixel"
+    }
+  ],
+  "lines": [
+    {
+      "block_id": "paddle-p0-l0",
+      "page_index": 0,
+      "line_order": 0,
+      "text": "샘플카페",
+      "normalized_text": "샘플카페",
+      "confidence": 96.0,
+      "bbox": [[20, 20], [220, 20], [220, 60], [20, 60]],
+      "block_type": "line"
+    },
+    {
+      "block_id": "paddle-p0-l1",
+      "page_index": 0,
+      "line_order": 1,
+      "text": "사용일자 2026-05-01",
+      "normalized_text": "사용일자 2026-05-01",
+      "confidence": 0.95,
+      "bbox": [[20, 80], [360, 80], [360, 120], [20, 120]],
+      "block_type": "line"
+    },
+    {
+      "block_id": "paddle-p0-l2",
+      "page_index": 0,
+      "line_order": 2,
+      "text": "총금액 12000",
+      "normalized_text": "총금액 12000",
+      "confidence": 0.93,
+      "bbox": [[20, 140], [280, 140], [280, 180], [20, 180]],
+      "block_type": "line"
+    },
+    {
+      "block_id": "paddle-p0-l3",
+      "page_index": 0,
+      "line_order": 3,
+      "text": "공급가액 10909",
+      "normalized_text": "공급가액 10909",
+      "confidence": 0.92,
+      "bbox": [[20, 200], [300, 200], [300, 240], [20, 240]],
+      "block_type": "line"
+    },
+    {
+      "block_id": "paddle-p0-l4",
+      "page_index": 0,
+      "line_order": 4,
+      "text": "부가세 1091",
+      "normalized_text": "부가세 1091",
+      "confidence": 0.91,
+      "bbox": [[20, 260], [260, 260], [260, 300], [20, 300]],
+      "block_type": "line"
+    },
+    {
+      "block_id": "paddle-p0-l5",
+      "page_index": 0,
+      "line_order": 5,
+      "text": "결제수단 카드",
+      "normalized_text": "결제수단 카드",
+      "confidence": 0.9,
+      "bbox": [[20, 320], [280, 320], [280, 360], [20, 360]],
+      "block_type": "line"
+    }
+  ],
+  "key_value_candidates": [
+    {
+      "key": "merchant_name",
+      "value": "샘플카페",
+      "normalized_value": "샘플카페",
+      "candidate_type": "merchant_name",
+      "confidence": 0.94,
+      "source_block_ids": ["paddle-p0-l0"]
+    },
+    {
+      "key": "transaction_date",
+      "value": "2026-05-01",
+      "normalized_value": "2026-05-01",
+      "candidate_type": "transaction_date",
+      "confidence": 0.93,
+      "source_block_ids": ["paddle-p0-l1"]
+    },
+    {
+      "key": "total_amount",
+      "value": "12000",
+      "normalized_value": "12000",
+      "candidate_type": "total_amount",
+      "confidence": 0.92,
+      "source_block_ids": ["paddle-p0-l2"]
+    },
+    {
+      "key": "supply_amount",
+      "value": "10909",
+      "normalized_value": "10909",
+      "candidate_type": "supply_amount",
+      "confidence": 0.91,
+      "source_block_ids": ["paddle-p0-l3"]
+    },
+    {
+      "key": "vat_amount",
+      "value": "1091",
+      "normalized_value": "1091",
+      "candidate_type": "vat_amount",
+      "confidence": 0.91,
+      "source_block_ids": ["paddle-p0-l4"]
+    },
+    {
+      "key": "payment_method",
+      "value": "카드",
+      "normalized_value": "card",
+      "candidate_type": "payment_method",
+      "confidence": 0.9,
+      "source_block_ids": ["paddle-p0-l5"]
+    }
+  ],
+  "warnings": []
+}

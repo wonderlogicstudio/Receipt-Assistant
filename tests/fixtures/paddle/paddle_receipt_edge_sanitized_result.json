@@ -1,0 +1,224 @@
+{
+  "id": "paddle-edge-001",
+  "engine": "paddleocr",
+  "engine_version": "test",
+  "status": "partial",
+  "language_hint": "ko",
+  "input_type": "image",
+  "image_count": 1,
+  "has_angle_classifier": true,
+  "has_gpu": false,
+  "confidence": 0.72,
+  "diagnostic_code": "paddle_partial_result",
+  "pages": [
+    {
+      "page_index": 0,
+      "width": 1200,
+      "height": 1800,
+      "unit": "pixel"
+    }
+  ],
+  "lines": [
+    {
+      "block_id": "paddle-edge-p0-l0",
+      "page_index": 0,
+      "line_order": 0,
+      "text": "테스트마트",
+      "normalized_text": "테스트마트",
+      "confidence": 0.89,
+      "bbox": [20, 20, 260, 70],
+      "block_type": "line"
+    },
+    {
+      "block_id": "paddle-edge-p0-l1",
+      "page_index": 0,
+      "line_order": 1,
+      "text": "사업자번호 000-00-00000",
+      "normalized_text": "사업자번호 000-00-00000",
+      "confidence": 0.83,
+      "bbox": [[20, 90], [360, 90], [360, 130], [20, 130]],
+      "block_type": "line"
+    },
+    {
+      "block_id": "paddle-edge-p0-l2",
+      "page_index": 0,
+      "line_order": 2,
+      "text": "할인전금액 10000",
+      "normalized_text": "할인전금액 10000",
+      "confidence": 0.82,
+      "bbox": [[20, 150], [320, 150], [320, 190], [20, 190]],
+      "block_type": "line"
+    },
+    {
+      "block_id": "paddle-edge-p0-l3",
+      "page_index": 0,
+      "line_order": 3,
+      "text": "할인금액 10000",
+      "normalized_text": "할인금액 10000",
+      "confidence": 0.81,
+      "bbox": [[20, 210], [300, 210], [300, 250], [20, 250]],
+      "block_type": "line"
+    },
+    {
+      "block_id": "paddle-edge-p0-l4",
+      "page_index": 0,
+      "line_order": 4,
+      "text": "최종결제금액 0",
+      "normalized_text": "최종결제금액 0",
+      "confidence": 0.8,
+      "bbox": [[20, 270], [310, 270], [310, 310], [20, 310]],
+      "block_type": "line"
+    },
+    {
+      "block_id": "paddle-edge-p0-l5",
+      "page_index": 0,
+      "line_order": 5,
+      "text": "수량 3",
+      "normalized_text": "수량 3",
+      "confidence": 0.79,
+      "bbox": [[20, 330], [180, 330], [180, 370], [20, 370]],
+      "block_type": "line"
+    },
+    {
+      "block_id": "paddle-edge-p0-l6",
+      "page_index": 0,
+      "line_order": 6,
+      "text": "승인번호 APPROVAL-PADDLE-42",
+      "normalized_text": "승인번호 APPROVAL-PADDLE-42",
+      "confidence": 0.77,
+      "bbox": [[20, 390], [430, 390], [430, 430], [20, 430]],
+      "block_type": "line"
+    },
+    {
+      "block_id": "paddle-edge-p0-l7",
+      "page_index": 0,
+      "line_order": 7,
+      "text": "푸터번호 FOOTER-88",
+      "normalized_text": "푸터번호 FOOTER-88",
+      "confidence": 0.74,
+      "bbox": [[20, 450], [340, 450], [340, 490], [20, 490]],
+      "block_type": "line"
+    },
+    {
+      "block_id": "paddle-edge-p0-l8",
+      "page_index": 0,
+      "line_order": 8,
+      "text": "부가세 미표기",
+      "normalized_text": "부가세 미표기",
+      "confidence": 0.76,
+      "bbox": [[20, 510], [280, 510], [280, 550], [20, 550]],
+      "block_type": "line"
+    },
+    {
+      "block_id": "paddle-edge-p0-l9",
+      "page_index": 0,
+      "line_order": 9,
+      "text": "[REDACTED]",
+      "normalized_text": "[REDACTED]",
+      "confidence": 0.88,
+      "bbox": [[20, 570], [250, 570], [250, 610], [20, 610]],
+      "block_type": "line",
+      "sensitive_category": "wifi_credential"
+    }
+  ],
+  "key_value_candidates": [
+    {
+      "key": "merchant_name",
+      "value": "테스트마트",
+      "normalized_value": "테스트마트",
+      "candidate_type": "merchant_name",
+      "confidence": 0.88,
+      "source_block_ids": ["paddle-edge-p0-l0"]
+    },
+    {
+      "key": "business_number",
+      "value": "000-00-00000",
+      "normalized_value": "000-00-00000",
+      "candidate_type": "business_number",
+      "confidence": 0.82,
+      "source_block_ids": ["paddle-edge-p0-l1"]
+    },
+    {
+      "key": "gross_amount",
+      "value": "10000",
+      "normalized_value": "10000",
+      "candidate_type": "gross_amount",
+      "confidence": 0.81,
+      "source_block_ids": ["paddle-edge-p0-l2"]
+    },
+    {
+      "key": "discount_amount",
+      "value": "10000",
+      "normalized_value": "10000",
+      "candidate_type": "discount_amount",
+      "confidence": 0.8,
+      "source_block_ids": ["paddle-edge-p0-l3"]
+    },
+    {
+      "key": "final_amount",
+      "value": "0",
+      "normalized_value": "0",
+      "candidate_type": "final_amount",
+      "confidence": 0.79,
+      "source_block_ids": ["paddle-edge-p0-l4"]
+    },
+    {
+      "key": "paid_amount",
+      "value": "0",
+      "normalized_value": "0",
+      "candidate_type": "paid_amount",
+      "confidence": 0.78,
+      "source_block_ids": ["paddle-edge-p0-l4"]
+    },
+    {
+      "key": "quantity",
+      "value": "3",
+      "normalized_value": "3",
+      "candidate_type": "quantity",
+      "confidence": 0.79,
+      "source_block_ids": ["paddle-edge-p0-l5"]
+    },
+    {
+      "key": "approval_number",
+      "value": "APPROVAL-PADDLE-42",
+      "normalized_value": "APPROVAL-PADDLE-42",
+      "candidate_type": "approval_number",
+      "confidence": 0.77,
+      "source_block_ids": ["paddle-edge-p0-l6"]
+    },
+    {
+      "key": "footer_number",
+      "value": "FOOTER-88",
+      "normalized_value": "FOOTER-88",
+      "candidate_type": "footer_number",
+      "confidence": 0.74,
+      "source_block_ids": ["paddle-edge-p0-l7"]
+    },
+    {
+      "key": "vat_missing",
+      "value": "미표기",
+      "normalized_value": "vat_missing",
+      "candidate_type": "vat_missing",
+      "confidence": 0.76,
+      "source_block_ids": ["paddle-edge-p0-l8"]
+    },
+    {
+      "key": "vat_review_hint",
+      "value": "부가세 미표기",
+      "normalized_value": "부가세 검토 필요",
+      "candidate_type": "vat_review_hint",
+      "confidence": 0.76,
+      "source_block_ids": ["paddle-edge-p0-l8"]
+    },
+    {
+      "key": "sensitive_hint",
+      "value": "[REDACTED]",
+      "normalized_value": "wifi_credential",
+      "candidate_type": "sensitive_hint",
+      "confidence": 0.88,
+      "source_block_ids": ["paddle-edge-p0-l9"],
+      "sensitive_category": "wifi_credential"
+    }
+  ],
+  "warnings": ["paddle_partial_result"]
+}

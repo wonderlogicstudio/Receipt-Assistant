@@ -1,0 +1,17 @@
+{
+  "id": "paddle-empty-001",
+  "engine": "paddleocr",
+  "engine_version": "test",
+  "status": "failed",
+  "language_hint": "ko",
+  "input_type": "image",
+  "image_count": 1,
+  "has_angle_classifier": false,
+  "has_gpu": false,
+  "confidence": 0.0,
+  "diagnostic_code": "paddle_no_text_detected",
+  "pages": [],
+  "lines": [],
+  "key_value_candidates": [],
+  "warnings": ["paddle_empty_result"]
+}

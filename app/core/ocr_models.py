@@ -21,6 +21,7 @@ class OCRResult:
     status: str = OCRStatus.COMPLETED.value
     error_message: str | None = None
     diagnostic_code: str | None = None
+    diagnostic_detail_code: str | None = None
     created_at: datetime = field(default_factory=datetime.utcnow)
 
     @classmethod
@@ -57,6 +58,7 @@ class OCRResult:
         provider: OCRProviderName | str,
         error_message: str,
         diagnostic_code: str | None = None,
+        diagnostic_detail_code: str | None = None,
     ) -> "OCRResult":
         return cls(
             id=str(uuid4()),
@@ -70,6 +72,7 @@ class OCRResult:
             status=OCRStatus.SKIPPED.value,
             error_message=error_message,
             diagnostic_code=diagnostic_code or "skipped",
+            diagnostic_detail_code=diagnostic_detail_code,
         )
 
     @classmethod
@@ -82,6 +85,7 @@ class OCRResult:
         provider: OCRProviderName | str,
         error_message: str,
         diagnostic_code: str | None = None,
+        diagnostic_detail_code: str | None = None,
     ) -> "OCRResult":
         return cls(
             id=str(uuid4()),
@@ -95,4 +99,5 @@ class OCRResult:
             status=OCRStatus.FAILED.value,
             error_message=error_message,
             diagnostic_code=diagnostic_code or "ocr_failed",
+            diagnostic_detail_code=diagnostic_detail_code,
         )

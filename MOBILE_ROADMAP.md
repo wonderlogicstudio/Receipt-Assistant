@@ -59,3 +59,40 @@
 | 고객 피드백 | 모바일 촬영 업로드 니즈 확인 |
 | 산출물 품질 | 세무사 전달용 엑셀 양식 1차 합격 |
 | 반복 사용 | 2회 이상 재사용 의향 확인 |
+
+---
+
+## 6. 모바일 앱의 역할 보완
+
+기존 판단은 유지합니다. 첫 MVP에서는 네이티브 모바일 앱을 만들지 않고, 웹 MVP로 OCR/검수/엑셀 산출물 품질을 먼저 검증합니다.
+
+다만 파일럿 이후 모바일 앱을 검토할 때는 전체 업무 도구가 아니라 경량 진입점으로 설계합니다.
+
+| 역할 | 방향 |
+|---|---|
+| 홍보/유입 | 사용자가 영수증 촬영과 간단 확인 경험을 빠르게 이해하게 한다 |
+| 촬영/선택 | 영수증 여러 장 촬영 또는 이미지 선택을 지원한다 |
+| 간단 OCR | Android는 ML Kit, iOS는 Apple Vision을 OCR 후보로 둔다 |
+| 간단 검수 | 날짜, 상호, 총금액 같은 핵심 필드만 빠르게 확인한다 |
+| 공유/이어하기 | 앱 OCR 결과를 JSON/ZIP으로 내보내 웹/PC에서 이어 처리할 수 있게 한다 |
+
+## 7. Mobile StandardOCRResult 전략
+
+모바일 앱도 웹/PC와 같은 `StandardOCRResult`를 생성해야 합니다.
+
+- Android ML Kit 결과는 Adapter를 통해 `text_blocks`, `key_value_candidates` 중심의 `StandardOCRResult`로 변환합니다.
+- iOS Apple Vision 결과도 Adapter를 통해 `text_blocks`, `key_value_candidates` 중심의 `StandardOCRResult`로 변환합니다.
+- 앱에서 직접 Azure를 호출하는 방식은 기본값으로 두지 않습니다.
+- 검토필요 건은 웹/서버에서 Azure fallback으로 재처리할 수 있게 합니다.
+- 앱과 웹이 서로 다른 OCR 결과 구조를 쓰지 않도록 Standard Core를 공유합니다.
+- 모바일 앱이 직접 `ExcelExporter`나 Processing History 전체 기능을 중복 구현하지 않도록 합니다.
+
+## 8. 모바일에서 웹/PC 중심으로 남길 기능
+
+| 기능 | 유지 방향 |
+|---|---|
+| 상세 검수 | 웹/PC 중심 |
+| 카드내역 업로드와 대조 | 웹/PC 중심 |
+| 표준 엑셀 다운로드 | 웹/PC 중심 |
+| 처리 이력 조회와 기존 export 재다운로드 | 웹/PC 중심 |
+| Provider 설정과 저장소 상태 확인 | 웹/PC 중심 |

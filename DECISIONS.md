@@ -253,6 +253,201 @@
 
 ---
 
+## ADR-020: OCR Provider 독립성을 위해 StandardOCRResult를 도입한다
+
+| 항목 | 내용 |
+|---|---|
+| 날짜 | 2026-05-14 |
+| 결정 | 모든 OCR Provider는 provider raw response를 `StandardOCRResult`로 변환한 뒤 Parser에 전달한다 |
+| 이유 | Azure 비용 의존도를 줄이고 PaddleOCR, Tesseract, 모바일 OCR, Local Runtime으로 확장하기 위해서다 |
+| 영향 | `ReceiptParser`, `ReceiptValidator`, `CategoryRules`, `CardMatcher`, `ExcelExporter`는 provider별 원본 구조를 알지 않는다 |
+| 리스크 | `StandardOCRResult` 설계가 부실하면 provider별 특징을 잃거나 Parser 품질이 떨어질 수 있다 |
+| 대응 | Golden Test Fixture와 provider별 Adapter 테스트를 만든다 |
+
+---
+
+## ADR-021: Azure는 제거하지 않고 fallback 또는 유료 재처리 옵션으로 유지한다
+
+| 항목 | 내용 |
+|---|---|
+| 날짜 | 2026-05-14 |
+| 결정 | Azure OCR은 제거하지 않고 고정확도 fallback 또는 유료 재처리 옵션으로 유지한다 |
+| 이유 | Azure 품질은 괜찮지만 모든 처리를 Azure에 고정하면 비용 의존도가 커진다 |
+| 영향 | 기본 처리 엔진은 향후 Local OCR로 전환할 수 있지만 Azure Adapter는 유지한다 |
+| 리스크 | Provider 선택 정책이 복잡해질 수 있다 |
+| 대응 | 초기에는 설정/문서 기준으로만 정의하고, provider 변경 UI는 별도 단계에서 검토한다 |
+
+---
+
+## ADR-022: PC Local OCR Runtime은 PaddleOCR을 1차 후보로 검토한다
+
+| 항목 | 내용 |
+|---|---|
+| 날짜 | 2026-05-14 |
+| 결정 | PC Local OCR Runtime의 1차 후보는 PaddleOCR로 둔다 |
+| 이유 | 장기적으로 OCR 비용을 줄이고 로컬 처리 가능성을 검토하기 위해서다 |
+| 영향 | 웹은 OCR 엔진이 아니라 업로드/검수 화면 역할에 집중할 수 있다 |
+| 리스크 | 사용자 PC 환경, 설치 난이도, 성능 편차가 발생할 수 있다 |
+| 대응 | 9~11주차에서 PoC와 설치형 구조를 분리해 검토한다 |
+
+---
+
+## ADR-024: Azure OCR 결과는 Azure Adapter를 통해 StandardOCRResult로 정규화한다
+
+| 항목 | 내용 |
+|---|---|
+| 날짜 | 2026-05-14 |
+| 결정 | Azure raw response는 Parser에 직접 전달하지 않고 `AzureStandardOCRAdapter`를 통해 `StandardOCRResult`로 변환한다 |
+| 이유 | Parser가 Azure 전용 raw 구조에 의존하면 PaddleOCR, Tesseract, 모바일 OCR, Local Runtime 확장이 어려워지기 때문이다 |
+| 영향 | Azure 구조화 필드는 `provider_fields`와 `StandardOCRTextBlock`, `StandardOCRKeyValueCandidate`, `StandardOCRTableCandidate`로 제한적으로 매핑한다 |
+| 리스크 | Azure 고유 정보가 과도하게 제거되면 Parser 품질이 떨어질 수 있다 |
+| 대응 | `provider_fields`에는 비민감 요약 정보만 담고, 필요한 후보값은 `key_value_candidates`와 `text_blocks`로 정규화한다. Golden fixture와 adapter 테스트로 품질을 확인한다 |
+
+---
+
+## ADR-025: provider_fields는 raw JSON 저장소가 아니라 비민감 provider metadata 영역으로 제한한다
+
+| 항목 | 내용 |
+|---|---|
+| 날짜 | 2026-05-14 |
+| 결정 | `provider_fields`에는 provider별 비민감 metadata와 구조화 요약만 저장한다 |
+| 이유 | `provider_fields`가 raw JSON 우회 저장소가 되면 보안 원칙과 Parser 독립성이 깨진다 |
+| 영향 | `raw_response`, `raw_json`, `provider_raw_response`, `full_ocr_text`, headers, endpoint 전체 URL, `operation_location` 전체 URL은 `provider_fields`에 넣지 않는다 |
+| 리스크 | 디버깅 정보가 부족할 수 있다 |
+| 대응 | `diagnostic_code`, `warnings`, `adapter_version`, `page_count`, `has_tables`, `normalized_candidate_count` 같은 제한된 진단 정보만 사용한다 |
+
+---
+
+## ADR-026: Azure Provider 변경과 Parser 전환은 분리한다
+
+| 항목 | 내용 |
+|---|---|
+| 날짜 | 2026-05-14 |
+| 결정 | Azure Adapter 구현, Azure Provider 연결, Parser 전환은 각각 별도 단계로 진행한다 |
+| 이유 | 기존 MVP 흐름과 Azure OCR 동작을 보호하기 위해서다 |
+| 영향 | 7주차-B에서는 Adapter만 구현하고, 7주차-C에서 기존 Provider와 연결을 검토하며, 8주차에서 Parser 전환을 다룬다 |
+| 리스크 | 전환 단계가 늘어나 일정이 길어질 수 있다 |
+| 대응 | 각 단계마다 fixture와 회귀 테스트를 추가해 안정성을 우선한다 |
+
+---
+
+## ADR-027: ReceiptParser 입력은 StandardOCRParserContext 기준으로 단계 전환한다
+
+| 항목 | 내용 |
+|---|---|
+| 날짜 | 2026-05-14 |
+| 결정 | `ReceiptParser`는 Provider raw response를 직접 받지 않고, `StandardOCRParserContext` 또는 `StandardOCRResult` 기반 입력으로 단계 전환한다 |
+| 이유 | Azure, PaddleOCR, Tesseract, Android ML Kit, iOS Apple Vision 등 Provider 확장 시 Parser가 provider별 원본 구조에 종속되지 않도록 하기 위해서다 |
+| 영향 | 기존 raw_text Parser 경로는 즉시 삭제하지 않고 compatibility wrapper로 유지한다. 새 Parser entry는 기존 `ReceiptRecord`를 반환해야 한다 |
+| 리스크 | 전환 중 기존 Parser 결과와 새 Parser 결과가 달라질 수 있다 |
+| 대응 | mock, azure-like, Azure Adapter output, edge-case fixture 기반 비교 테스트를 추가하고, 기존 end-to-end export flow 테스트를 유지한다 |
+
+---
+
+## ADR-028: Parser 전환 중 ReceiptRecord와 ExcelExporter 구조는 유지한다
+
+| 항목 | 내용 |
+|---|---|
+| 날짜 | 2026-05-14 |
+| 결정 | Parser 입력을 표준화하더라도 `ReceiptRecord`와 `ExcelExporter` 구조는 대규모로 변경하지 않는다 |
+| 이유 | 검수 UI, 처리 이력, 엑셀 산출물이 이미 기존 `ReceiptRecord` 구조에 의존하기 때문이다 |
+| 영향 | Parser 전환은 입력 계층 중심으로 진행하고, 출력 모델과 산출물은 기존 호환성을 우선한다 |
+| 리스크 | 일부 `StandardOCRResult` 정보가 `ReceiptRecord`에 바로 반영되지 않을 수 있다 |
+| 대응 | 필요한 정보는 `parser_warnings`, `validation_warnings`, `amount_warnings`, `vat_warnings`, `sensitive_categories` 등 기존 필드를 우선 활용한다 |
+
+---
+
+## ADR-029: Parser 전환은 B/C/D 단계로 분리해 회귀 위험을 줄인다
+
+| 항목 | 내용 |
+|---|---|
+| 날짜 | 2026-05-14 |
+| 결정 | Parser entry 추가, fixture 비교 테스트, Validator/Exporter 회귀 점검을 별도 단계로 분리한다 |
+| 이유 | Parser는 OCR 이후 전체 흐름의 핵심이므로 한 번에 변경하면 회귀 위험이 크다 |
+| 영향 | 8주차-B에서는 entry만 추가하고, 8주차-C에서 fixture 결과 비교, 8주차-D에서 downstream 회귀를 검증한다 |
+| 리스크 | 단계가 늘어나 일정이 길어질 수 있다 |
+| 대응 | 각 단계별 완료 기준과 rollback 기준을 명확히 둔다 |
+
+---
+
+## ADR-030: PaddleOCR is the first PC Local OCR Runtime candidate
+
+| Item | Content |
+|---|---|
+| Date | 2026-05-15 |
+| Decision | Treat PaddleOCR as the first candidate for the PC Local OCR Runtime PoC. |
+| Reason | The project needs a local OCR path to reduce long-term Azure cost dependency and test whether users' PCs or office machines can process receipt images locally. |
+| Impact | Week 9 focuses on an image-first Local Provider PoC. PDF handling, desktop packaging, and server runtime packaging remain follow-up work. |
+| Risk | User PC OS, Python version, PaddleOCR installation status, model availability, and performance can vary significantly. |
+| Response | Treat `paddleocr` as an optional dependency. Do not call actual PaddleOCR in default pytest. Put actual OCR smoke tests behind an explicit opt-in flag. |
+
+---
+
+## ADR-031: PaddleOCRProvider must return StandardOCRResult
+
+| Item | Content |
+|---|---|
+| Date | 2026-05-15 |
+| Decision | `PaddleOCRProvider` must convert PaddleOCR raw output to `StandardOCRResult` before parser use. |
+| Reason | Parser and downstream services must stay independent of provider raw structures. |
+| Impact | PaddleOCR raw output is normalized by `PaddleStandardOCRAdapter` into `StandardOCRTextBlock`, `key_value_candidates`, warnings, confidence, bbox, and limited non-sensitive `provider_fields`. |
+| Risk | Some PaddleOCR-specific details may not fit the standard schema directly. |
+| Response | Preserve only parser-relevant safe fields and non-sensitive count/flag metadata. Use Golden Fixture comparison and later quality comparison to identify gaps. |
+
+---
+
+## ADR-032: Actual PaddleOCR execution tests are opt-in
+
+| Item | Content |
+|---|---|
+| Date | 2026-05-15 |
+| Decision | Actual PaddleOCR OCR execution tests are excluded from default pytest and run only with an explicit opt-in condition such as `RUN_PADDLEOCR_TESTS=1`. |
+| Reason | PaddleOCR may be missing, slow to initialize, require model files, or behave differently by OS and hardware. |
+| Impact | Default pytest must pass without PaddleOCR installed. Week 9-D smoke tests are separate from normal regression tests. |
+| Risk | Default tests cannot prove real OCR quality. |
+| Response | Use sanitized PaddleOCR-like fixture tests for default coverage, then run opt-in image smoke tests and 10주차 Azure vs PaddleOCR quality comparison separately. |
+
+---
+
+## ADR-033: PaddleOCR PDF handling is deferred after the image PoC
+
+| Item | Content |
+|---|---|
+| Date | 2026-05-15 |
+| Decision | Week 9 PaddleOCR PoC is limited to image files. PDF handling is deferred. |
+| Reason | PDF local OCR requires page rendering, multi-page handling, file-size controls, additional dependencies, and performance decisions. |
+| Impact | Week 9-B/C/D focus on JPG/JPEG/PNG-style image inputs. PDF input is documented as unsupported or deferred for the local PaddleOCR path. |
+| Risk | PDF receipt users do not benefit from the initial PaddleOCR PoC. |
+| Response | Keep existing Azure/mock flow and later evaluate PDF local OCR in Local Runtime or a separate follow-up task. |
+
+---
+
+## ADR-034: Azure vs PaddleOCR 품질 비교는 표준 계층 결과만 비교한다
+
+| 항목 | 내용 |
+|---|---|
+| 날짜 | 2026-05-16 |
+| 결정 | Azure와 PaddleOCR 품질 비교는 `StandardOCRResult`, `StandardOCRParserContext`, 기존 `ReceiptRecord` 핵심 필드만 사용한다. |
+| 이유 | Provider raw output을 비교 기준으로 삼으면 Parser 독립성과 보안 원칙이 깨지고, Azure와 PaddleOCR 결과를 같은 제품 흐름에서 판단하기 어렵다. |
+| 영향 | 10주차-B/C/D의 미리보기, side-by-side 리포트, 통계 요약, fallback 기준은 표준 계층의 비민감 요약 필드와 검토 필요 신호만 사용한다. expected fixture도 provider raw output이 아니라 안전한 sample id와 `ReceiptRecord` 핵심 필드 기준선으로 둔다. |
+| 리스크 | Provider별 원본 세부 정보가 부족해 원인 분석이 제한될 수 있다. |
+| 대응 | `diagnostic_code`, `warnings`, candidate count, review hint count, field match score, 처리시간 같은 비민감 지표를 남기고, 실제 raw output 분석은 별도 안전 절차로 분리한다. |
+
+---
+
+## ADR-035: Safe OCR preview uses StandardOCRResult text blocks only
+
+| Item | Content |
+|---|---|
+| Date | 2026-05-16 |
+| Decision | The Week 10-B OCR preview is built from `StandardOCRResult.text_blocks` and exposes only limited safe rows plus summary counts. |
+| Reason | Reviewers need to see what PaddleOCR read without exposing provider raw output, full OCR raw text, raw JSON, full local paths, or secrets. |
+| Impact | PaddleOCR smoke-test results can show safe preview rows in Settings, and Azure adapter output can reuse the same utility through `StandardOCRResult`. |
+| Risk | A short preview may hide useful context for deeper quality diagnosis. |
+| Response | Keep full side-by-side quality comparison, statistics, and fallback criteria in 10-C/D while preserving the no-raw-output boundary. |
+
+---
+
 ## ADR Template
 
 ```text
@@ -267,3 +462,45 @@
 | 리스크 |  |
 | 대응 |  |
 ```
+## ADR-036: Side-by-side comparison report uses only standard and parser results
+
+Status: Accepted
+
+Decision:
+Azure vs PaddleOCR side-by-side reports compare only `StandardOCRResult`, `StandardOCRParserContext`, and `ReceiptParser.parse_standard_context()` output. The report does not copy provider raw output, provider raw JSON, full OCR text, full file paths, Azure operation URLs, endpoints, or secrets into report rows.
+
+Reason:
+This keeps provider replacement, parser migration, and privacy boundaries intact while still allowing the team to inspect quality differences between Azure and PaddleOCR. It also preserves Week 10-D as an aggregation and fallback-policy step instead of mixing policy decisions into the first per-sample report.
+
+Impact:
+Week 10-C can show provider metrics, parsed core fields, and field equality flags per sample. Week 10-D may aggregate those safe values into summary statistics and fallback criteria, but any future policy must continue to avoid provider raw payloads.
+
+---
+
+## ADR-037: Provider failure details use sanitized diagnostic categories
+
+Status: Accepted
+
+Decision:
+Provider failures may include a `diagnostic_detail_code` only when the value is a sanitized category, such as `quota_or_rate_limit`, `credential_or_permission`, `region_or_endpoint`, `non_json_error`, `runtime_error`, or `value_error`.
+
+Reason:
+The comparison UI needs enough information to distinguish external service limits from OCR quality failures, but it must not expose raw provider messages, Azure endpoint URLs, operation URLs, request IDs, keys, full local paths, raw tracebacks, or provider payloads.
+
+Impact:
+Azure HTTP 403 can be shown as `analyze_http_403` with detail `quota_or_rate_limit`. Week 10-D can aggregate these safe detail codes as environment/service availability signals. The rule applies to future providers as well: detail codes are categories, not raw errors.
+
+---
+
+## ADR-038: PaddleOCR line-derived candidates stay conservative
+
+Status: Accepted
+
+Decision:
+PaddleOCRProvider may derive candidates from safe OCR lines only for obvious dates, business numbers, payment methods, and clearly labeled amounts. It must not guess merchant names from arbitrary top lines or infer total amounts from unlabeled maximum amounts.
+
+Reason:
+Early 10-sample testing showed that aggressive candidate guesses can increase apparent field presence while lowering comparison quality by turning missing fields into wrong fields.
+
+Impact:
+PaddleOCR comparisons remain more honest: missing or weak fields stay visible as review/fallback signals. Future improvements should be driven by expected fixtures and Week 10-D statistics rather than broad heuristics.

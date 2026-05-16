@@ -1,0 +1,182 @@
+{
+  "id": "standard_ocr_azure_like_001",
+  "source_file_id": "file_azure_like_001",
+  "source_file_name": "sample_azure_receipt_001.pdf",
+  "provider": "azure",
+  "provider_version": "dummy",
+  "engine_runtime": "server",
+  "status": "completed",
+  "pages": [
+    {
+      "page_index": 0,
+      "width": 1240,
+      "height": 1754,
+      "unit": "pixel"
+    }
+  ],
+  "safe_text_summary": "테스트마트 영수증 요약. 할인전금액 22000, 할인금액 2000, 최종결제금액 20000, 실제결제금액 20000. 부가세 미표기 검토 필요. 민감문구 category만 감지.",
+  "text_blocks": [
+    {
+      "page_index": 0,
+      "block_id": "b001",
+      "text": "테스트마트",
+      "normalized_text": "테스트마트",
+      "confidence": 0.97,
+      "bbox": [60, 110, 500, 155],
+      "line_order": 1,
+      "block_type": "line",
+      "sensitive_category": null
+    },
+    {
+      "page_index": 0,
+      "block_id": "b002",
+      "text": "사업자번호 000-00-00000",
+      "normalized_text": "사업자번호 000-00-00000",
+      "confidence": 0.93,
+      "bbox": [60, 170, 560, 210],
+      "line_order": 2,
+      "block_type": "line",
+      "sensitive_category": null
+    },
+    {
+      "page_index": 0,
+      "block_id": "b003",
+      "text": "할인전금액 22,000",
+      "normalized_text": "할인전금액 22000",
+      "confidence": 0.94,
+      "bbox": [60, 480, 520, 520],
+      "line_order": 3,
+      "block_type": "line",
+      "sensitive_category": null
+    },
+    {
+      "page_index": 0,
+      "block_id": "b004",
+      "text": "할인금액 2,000",
+      "normalized_text": "할인금액 2000",
+      "confidence": 0.92,
+      "bbox": [60, 530, 500, 570],
+      "line_order": 4,
+      "block_type": "line",
+      "sensitive_category": null
+    },
+    {
+      "page_index": 0,
+      "block_id": "b005",
+      "text": "최종결제금액 20,000",
+      "normalized_text": "최종결제금액 20000",
+      "confidence": 0.95,
+      "bbox": [60, 600, 560, 645],
+      "line_order": 5,
+      "block_type": "line",
+      "sensitive_category": null
+    },
+    {
+      "page_index": 0,
+      "block_id": "b006",
+      "text": "실제결제금액 20,000",
+      "normalized_text": "실제결제금액 20000",
+      "confidence": 0.95,
+      "bbox": [60, 650, 560, 695],
+      "line_order": 6,
+      "block_type": "line",
+      "sensitive_category": null
+    },
+    {
+      "page_index": 0,
+      "block_id": "b007",
+      "text": "부가세 별도 표기 없음",
+      "normalized_text": "부가세 별도 표기 없음",
+      "confidence": 0.87,
+      "bbox": [60, 720, 560, 760],
+      "line_order": 7,
+      "block_type": "line",
+      "sensitive_category": null
+    },
+    {
+      "page_index": 0,
+      "block_id": "b008",
+      "text": "[REDACTED]",
+      "normalized_text": "[REDACTED]",
+      "confidence": 0.8,
+      "bbox": [60, 900, 380, 940],
+      "line_order": 8,
+      "block_type": "line",
+      "sensitive_category": "wifi_password"
+    }
+  ],
+  "key_value_candidates": [
+    {
+      "key": "merchant_name",
+      "value": "테스트마트",
+      "normalized_value": "테스트마트",
+      "confidence": 0.97,
+      "source_block_ids": ["b001"],
+      "candidate_type": "merchant_name"
+    },
+    {
+      "key": "business_number",
+      "value": "000-00-00000",
+      "normalized_value": "0000000000",
+      "confidence": 0.93,
+      "source_block_ids": ["b002"],
+      "candidate_type": "business_number"
+    },
+    {
+      "key": "gross_amount",
+      "value": "22,000",
+      "normalized_value": "22000",
+      "confidence": 0.94,
+      "source_block_ids": ["b003"],
+      "candidate_type": "gross_amount"
+    },
+    {
+      "key": "discount_amount",
+      "value": "2,000",
+      "normalized_value": "2000",
+      "confidence": 0.92,
+      "source_block_ids": ["b004"],
+      "candidate_type": "discount_amount"
+    },
+    {
+      "key": "final_amount",
+      "value": "20,000",
+      "normalized_value": "20000",
+      "confidence": 0.95,
+      "source_block_ids": ["b005"],
+      "candidate_type": "final_amount"
+    },
+    {
+      "key": "paid_amount",
+      "value": "20,000",
+      "normalized_value": "20000",
+      "confidence": 0.95,
+      "source_block_ids": ["b006"],
+      "candidate_type": "paid_amount"
+    },
+    {
+      "key": "vat_review",
+      "value": "부가세 별도 표기 없음",
+      "normalized_value": "missing",
+      "confidence": 0.87,
+      "source_block_ids": ["b007"],
+      "candidate_type": "vat_missing"
+    },
+    {
+      "key": "sensitive_hint",
+      "value": "[REDACTED]",
+      "normalized_value": "wifi_password",
+      "confidence": 0.8,
+      "source_block_ids": ["b008"],
+      "candidate_type": "sensitive_hint"
+    }
+  ],
+  "table_candidates": [],
+  "confidence": 0.93,
+  "warnings": [
+    "vat_missing_requires_review",
+    "sensitive_text_redacted"
+  ],
+  "diagnostic_code": "completed",
+  "created_at": "2026-05-14T21:05:00+09:00"
+}

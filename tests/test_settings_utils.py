@@ -9,6 +9,7 @@ from app.ui.settings_utils import (
     build_db_summary,
     build_history_connection_summary,
     build_ocr_settings_summary,
+    build_paddle_smoke_result_summary,
     build_retention_settings_summary,
     build_storage_summary,
     format_bytes,
@@ -16,6 +17,7 @@ from app.ui.settings_utils import (
     sanitize_cleanup_summary,
     sanitize_settings_display,
 )
+from app.core.standard_ocr import StandardOCRResult
 
 
 def make_service(tmp_path: Path) -> JobHistoryService:
@@ -40,6 +42,7 @@ def test_build_ocr_settings_summary_displays_mock_safely():
     assert summary["OCR Provider"] == "mock"
     assert summary["Azure key"] == "미설정"
     assert summary["Azure endpoint"] == "미설정"
+    assert summary["Azure ignore env proxy"] is False
 
 
 def test_build_ocr_settings_summary_masks_azure_secret_values():
@@ -57,6 +60,38 @@ def test_build_ocr_settings_summary_masks_azure_secret_values():
     assert summary["Azure endpoint"] == "설정됨"
     assert "real-secret-key" not in serialized
     assert "https://example" not in serialized
+
+
+def test_build_paddle_smoke_result_summary_is_count_and_status_only():
+    result = StandardOCRResult(
+        id="paddle-smoke-result",
+        source_file_id="source",
+        source_file_name="sample.png",
+        provider="paddleocr",
+        provider_version="optional",
+        engine_runtime="pc_local",
+        status="failed",
+        provider_fields={
+            "provider_family": "paddleocr",
+            "input_type": "image",
+            "adapter_version": "paddle-standard-adapter-v1",
+            "diagnostic_detail_code": "runtime_error",
+        },
+        warnings=["paddle_not_installed", "detail:runtime_error"],
+        diagnostic_code="paddle_not_installed",
+        created_at=__import__("datetime").datetime.now(),
+    )
+
+    summary = build_paddle_smoke_result_summary(result)
+    serialized = str(summary)
+
+    assert summary["provider"] == "paddleocr"
+    assert summary["diagnostic_code"] == "paddle_not_installed"
+    assert summary["diagnostic_detail_code"] == "runtime_error"
+    assert summary["warning_codes"] == "paddle_not_installed, detail:runtime_error"
+    assert summary["text_block_count"] == 0
+    assert "sample.png" not in serialized
+    assert "provider_fields" not in serialized
 
 
 def test_build_retention_settings_summary_returns_safe_values():

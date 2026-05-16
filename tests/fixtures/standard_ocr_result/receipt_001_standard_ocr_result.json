@@ -1,0 +1,128 @@
+{
+  "id": "standard_ocr_001",
+  "source_file_id": "file_001",
+  "source_file_name": "receipt_001.jpg",
+  "provider": "mock",
+  "provider_version": "mock-v1",
+  "engine_runtime": "mock",
+  "status": "completed",
+  "pages": [
+    {
+      "page_index": 0,
+      "width": 1080,
+      "height": 1920,
+      "unit": "pixel"
+    }
+  ],
+  "safe_text_summary": [
+    "스타벅스 테스트점",
+    "거래일자 2026-05-14",
+    "공급가액 10,909",
+    "부가세 1,091",
+    "합계 12,000"
+  ],
+  "text_blocks": [
+    {
+      "page_index": 0,
+      "block_id": "b001",
+      "text": "스타벅스 테스트점",
+      "normalized_text": "스타벅스 테스트점",
+      "confidence": 0.98,
+      "bbox": [40, 120, 620, 170],
+      "line_order": 1,
+      "block_type": "line",
+      "sensitive_category": null
+    },
+    {
+      "page_index": 0,
+      "block_id": "b002",
+      "text": "2026-05-14",
+      "normalized_text": "2026-05-14",
+      "confidence": 0.96,
+      "bbox": [40, 210, 360, 250],
+      "line_order": 2,
+      "block_type": "line",
+      "sensitive_category": null
+    },
+    {
+      "page_index": 0,
+      "block_id": "b003",
+      "text": "공급가액 10,909",
+      "normalized_text": "공급가액 10909",
+      "confidence": 0.94,
+      "bbox": [40, 520, 440, 560],
+      "line_order": 3,
+      "block_type": "line",
+      "sensitive_category": null
+    },
+    {
+      "page_index": 0,
+      "block_id": "b004",
+      "text": "부가세 1,091",
+      "normalized_text": "부가세 1091",
+      "confidence": 0.94,
+      "bbox": [40, 570, 390, 610],
+      "line_order": 4,
+      "block_type": "line",
+      "sensitive_category": null
+    },
+    {
+      "page_index": 0,
+      "block_id": "b005",
+      "text": "합계 12,000",
+      "normalized_text": "합계 12000",
+      "confidence": 0.97,
+      "bbox": [40, 650, 360, 700],
+      "line_order": 5,
+      "block_type": "line",
+      "sensitive_category": null
+    }
+  ],
+  "key_value_candidates": [
+    {
+      "key": "merchant_name",
+      "value": "스타벅스 테스트점",
+      "normalized_value": "스타벅스 테스트점",
+      "confidence": 0.98,
+      "source_block_ids": ["b001"],
+      "candidate_type": "merchant"
+    },
+    {
+      "key": "transaction_date",
+      "value": "2026-05-14",
+      "normalized_value": "2026-05-14",
+      "confidence": 0.96,
+      "source_block_ids": ["b002"],
+      "candidate_type": "date"
+    },
+    {
+      "key": "supply_amount",
+      "value": "10,909",
+      "normalized_value": 10909,
+      "confidence": 0.94,
+      "source_block_ids": ["b003"],
+      "candidate_type": "tax"
+    },
+    {
+      "key": "vat_amount",
+      "value": "1,091",
+      "normalized_value": 1091,
+      "confidence": 0.94,
+      "source_block_ids": ["b004"],
+      "candidate_type": "tax"
+    },
+    {
+      "key": "total_amount",
+      "value": "12,000",
+      "normalized_value": 12000,
+      "confidence": 0.97,
+      "source_block_ids": ["b005"],
+      "candidate_type": "amount"
+    }
+  ],
+  "table_candidates": [],
+  "confidence": 0.96,
+  "warnings": [],
+  "diagnostic_code": "completed",
+  "created_at": "2026-05-14T21:00:00+09:00"
+}

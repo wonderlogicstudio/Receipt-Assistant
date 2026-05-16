@@ -1,0 +1,179 @@
+{
+  "id": "azure-sanitized-edge-001",
+  "model_id": "prebuilt-receipt",
+  "api_version": "test",
+  "status": "succeeded",
+  "document_type": "receipt",
+  "locale_hint": "ko-KR",
+  "created_at": "2026-05-14T21:05:00+09:00",
+  "has_styles": false,
+  "pages": [
+    {
+      "page_index": 0,
+      "width": 1200,
+      "height": 1800,
+      "unit": "pixel",
+      "lines": [
+        {
+          "line_id": "az-edge-l001",
+          "text": "테스트마트",
+          "normalized_text": "테스트마트",
+          "confidence": 0.97,
+          "line_order": 0
+        },
+        {
+          "line_id": "az-edge-l002",
+          "text": "사업자 TEST-BIZ-01",
+          "normalized_text": "TEST-BIZ-01",
+          "confidence": 0.91,
+          "line_order": 1
+        },
+        {
+          "line_id": "az-edge-l003",
+          "text": "할인전금액 18000",
+          "normalized_text": "18000",
+          "confidence": 0.95,
+          "line_order": 2
+        },
+        {
+          "line_id": "az-edge-l004",
+          "text": "할인금액 3000",
+          "normalized_text": "3000",
+          "confidence": 0.93,
+          "line_order": 3
+        },
+        {
+          "line_id": "az-edge-l005",
+          "text": "최종결제금액 15000",
+          "normalized_text": "15000",
+          "confidence": 0.96,
+          "line_order": 4
+        },
+        {
+          "line_id": "az-edge-l006",
+          "text": "실제결제금액 0",
+          "normalized_text": "0",
+          "confidence": 0.92,
+          "line_order": 5
+        },
+        {
+          "line_id": "az-edge-l007",
+          "text": "수량 3",
+          "normalized_text": "3",
+          "confidence": 0.9,
+          "line_order": 6
+        },
+        {
+          "line_id": "az-edge-l008",
+          "text": "승인번호 APPROVAL-42",
+          "normalized_text": "APPROVAL-42",
+          "confidence": 0.89,
+          "line_order": 7
+        },
+        {
+          "line_id": "az-edge-l009",
+          "text": "푸터 REF-88",
+          "normalized_text": "REF-88",
+          "confidence": 0.87,
+          "line_order": 8
+        },
+        {
+          "line_id": "az-edge-l010",
+          "text": "부가세 별도 표시 없음",
+          "normalized_text": "vat not printed",
+          "confidence": 0.86,
+          "line_order": 9
+        },
+        {
+          "line_id": "az-edge-l011",
+          "text": "[REDACTED]",
+          "normalized_text": "[REDACTED]",
+          "confidence": 0.8,
+          "line_order": 10,
+          "sensitive_category": "wifi_credential"
+        }
+      ]
+    }
+  ],
+  "documents": [
+    {
+      "fields": {
+        "merchant_name": {
+          "value": "테스트마트",
+          "normalized_value": "테스트마트",
+          "confidence": 0.97,
+          "source_block_ids": ["az-edge-l001"]
+        },
+        "business_number": {
+          "value": "TEST-BIZ-01",
+          "normalized_value": "TEST-BIZ-01",
+          "confidence": 0.91,
+          "source_block_ids": ["az-edge-l002"]
+        },
+        "gross_amount": {
+          "value": "18000",
+          "normalized_value": "18000",
+          "confidence": 0.95,
+          "source_block_ids": ["az-edge-l003"]
+        },
+        "discount_amount": {
+          "value": "3000",
+          "normalized_value": "3000",
+          "confidence": 0.93,
+          "source_block_ids": ["az-edge-l004"]
+        },
+        "final_amount": {
+          "value": "15000",
+          "normalized_value": "15000",
+          "confidence": 0.96,
+          "source_block_ids": ["az-edge-l005"]
+        },
+        "paid_amount": {
+          "value": "0",
+          "normalized_value": "0",
+          "confidence": 0.92,
+          "source_block_ids": ["az-edge-l006"]
+        },
+        "quantity": {
+          "value": "3",
+          "normalized_value": "3",
+          "confidence": 0.9,
+          "source_block_ids": ["az-edge-l007"]
+        },
+        "approval_number": {
+          "value": "APPROVAL-42",
+          "normalized_value": "APPROVAL-42",
+          "confidence": 0.89,
+          "source_block_ids": ["az-edge-l008"]
+        },
+        "footer_number": {
+          "value": "REF-88",
+          "normalized_value": "REF-88",
+          "confidence": 0.87,
+          "source_block_ids": ["az-edge-l009"]
+        },
+        "vat_missing": {
+          "value": "not_printed",
+          "normalized_value": "not_printed",
+          "confidence": 0.86,
+          "source_block_ids": ["az-edge-l010"]
+        },
+        "vat_review_hint": {
+          "value": "manual_review_needed",
+          "normalized_value": "manual_review_needed",
+          "confidence": 0.86,
+          "source_block_ids": ["az-edge-l010"]
+        },
+        "sensitive_hint": {
+          "value": "[REDACTED]",
+          "normalized_value": "wifi_credential",
+          "confidence": 0.8,
+          "source_block_ids": ["az-edge-l011"],
+          "sensitive_category": "wifi_credential"
+        }
+      }
+    }
+  ],
+  "tables": [],
+  "warnings": ["vat_not_printed"]
+}

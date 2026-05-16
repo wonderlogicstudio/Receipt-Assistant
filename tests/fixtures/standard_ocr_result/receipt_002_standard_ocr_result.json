@@ -1,0 +1,130 @@
+{
+  "id": "standard_ocr_002",
+  "source_file_id": "file_002",
+  "source_file_name": "receipt_002.jpg",
+  "provider": "paddle",
+  "provider_version": "poc-fixture",
+  "engine_runtime": "local",
+  "status": "completed",
+  "pages": [
+    {
+      "page_index": 0,
+      "width": 1200,
+      "height": 1800,
+      "unit": "pixel"
+    }
+  ],
+  "safe_text_summary": [
+    "테스트문구점",
+    "거래일자 2026.05.14",
+    "상품금액 8,000",
+    "할인금액 1,000",
+    "결제대상금액 7,000"
+  ],
+  "text_blocks": [
+    {
+      "page_index": 0,
+      "block_id": "b001",
+      "text": "테스트문구점",
+      "normalized_text": "테스트문구점",
+      "confidence": 0.91,
+      "bbox": [55, 130, 480, 175],
+      "line_order": 1,
+      "block_type": "line",
+      "sensitive_category": null
+    },
+    {
+      "page_index": 0,
+      "block_id": "b002",
+      "text": "거래일자 2026.05.14",
+      "normalized_text": "거래일자 2026-05-14",
+      "confidence": 0.9,
+      "bbox": [55, 230, 460, 270],
+      "line_order": 2,
+      "block_type": "line",
+      "sensitive_category": null
+    },
+    {
+      "page_index": 0,
+      "block_id": "b003",
+      "text": "상품금액 8,000",
+      "normalized_text": "상품금액 8000",
+      "confidence": 0.89,
+      "bbox": [55, 540, 430, 580],
+      "line_order": 3,
+      "block_type": "line",
+      "sensitive_category": null
+    },
+    {
+      "page_index": 0,
+      "block_id": "b004",
+      "text": "할인금액 1,000",
+      "normalized_text": "할인금액 1000",
+      "confidence": 0.88,
+      "bbox": [55, 590, 430, 630],
+      "line_order": 4,
+      "block_type": "line",
+      "sensitive_category": null
+    },
+    {
+      "page_index": 0,
+      "block_id": "b005",
+      "text": "결제대상금액 7,000",
+      "normalized_text": "결제대상금액 7000",
+      "confidence": 0.93,
+      "bbox": [55, 660, 520, 705],
+      "line_order": 5,
+      "block_type": "line",
+      "sensitive_category": null
+    }
+  ],
+  "key_value_candidates": [
+    {
+      "key": "merchant_name",
+      "value": "테스트문구점",
+      "normalized_value": "테스트문구점",
+      "confidence": 0.91,
+      "source_block_ids": ["b001"],
+      "candidate_type": "merchant"
+    },
+    {
+      "key": "transaction_date",
+      "value": "2026.05.14",
+      "normalized_value": "2026-05-14",
+      "confidence": 0.9,
+      "source_block_ids": ["b002"],
+      "candidate_type": "date"
+    },
+    {
+      "key": "gross_amount",
+      "value": "8,000",
+      "normalized_value": 8000,
+      "confidence": 0.89,
+      "source_block_ids": ["b003"],
+      "candidate_type": "amount"
+    },
+    {
+      "key": "discount_amount",
+      "value": "1,000",
+      "normalized_value": 1000,
+      "confidence": 0.88,
+      "source_block_ids": ["b004"],
+      "candidate_type": "amount"
+    },
+    {
+      "key": "final_amount",
+      "value": "7,000",
+      "normalized_value": 7000,
+      "confidence": 0.93,
+      "source_block_ids": ["b005"],
+      "candidate_type": "amount"
+    }
+  ],
+  "table_candidates": [],
+  "confidence": 0.9,
+  "warnings": [
+    "structured_fields_unavailable"
+  ],
+  "diagnostic_code": "completed",
+  "created_at": "2026-05-14T21:05:00+09:00"
+}

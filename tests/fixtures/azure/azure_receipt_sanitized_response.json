@@ -1,0 +1,123 @@
+{
+  "id": "azure-sanitized-receipt-001",
+  "model_id": "prebuilt-receipt",
+  "api_version": "test",
+  "status": "succeeded",
+  "document_type": "receipt",
+  "locale_hint": "ko-KR",
+  "created_at": "2026-05-14T21:00:00+09:00",
+  "has_styles": false,
+  "pages": [
+    {
+      "page_index": 0,
+      "width": 1080,
+      "height": 1920,
+      "unit": "pixel",
+      "lines": [
+        {
+          "line_id": "az-001-l001",
+          "text": "샘플카페",
+          "normalized_text": "샘플카페",
+          "confidence": 0.98,
+          "bbox": [80, 120, 420, 160],
+          "line_order": 0
+        },
+        {
+          "line_id": "az-001-l002",
+          "text": "사용일자 2026-05-14",
+          "normalized_text": "2026-05-14",
+          "confidence": 0.96,
+          "bbox": [80, 210, 520, 250],
+          "line_order": 1
+        },
+        {
+          "line_id": "az-001-l003",
+          "text": "합계 12000",
+          "normalized_text": "12000",
+          "confidence": 0.97,
+          "bbox": [80, 420, 440, 460],
+          "line_order": 2
+        },
+        {
+          "line_id": "az-001-l004",
+          "text": "공급가액 10909",
+          "normalized_text": "10909",
+          "confidence": 0.94,
+          "bbox": [80, 470, 440, 510],
+          "line_order": 3
+        },
+        {
+          "line_id": "az-001-l005",
+          "text": "부가세 1091",
+          "normalized_text": "1091",
+          "confidence": 0.93,
+          "bbox": [80, 520, 440, 560],
+          "line_order": 4
+        },
+        {
+          "line_id": "az-001-l006",
+          "text": "결제수단 카드",
+          "normalized_text": "카드",
+          "confidence": 0.95,
+          "bbox": [80, 600, 440, 640],
+          "line_order": 5
+        }
+      ]
+    }
+  ],
+  "documents": [
+    {
+      "fields": {
+        "merchant_name": {
+          "value": "샘플카페",
+          "normalized_value": "샘플카페",
+          "confidence": 0.98,
+          "source_block_ids": ["az-001-l001"]
+        },
+        "transaction_date": {
+          "value": "2026-05-14",
+          "normalized_value": "2026-05-14",
+          "confidence": 0.96,
+          "source_block_ids": ["az-001-l002"]
+        },
+        "total_amount": {
+          "value": "12000",
+          "normalized_value": "12000",
+          "confidence": 0.97,
+          "source_block_ids": ["az-001-l003"]
+        },
+        "supply_amount": {
+          "value": "10909",
+          "normalized_value": "10909",
+          "confidence": 0.94,
+          "source_block_ids": ["az-001-l004"]
+        },
+        "vat_amount": {
+          "value": "1091",
+          "normalized_value": "1091",
+          "confidence": 0.93,
+          "source_block_ids": ["az-001-l005"]
+        },
+        "payment_method": {
+          "value": "카드",
+          "normalized_value": "card",
+          "confidence": 0.95,
+          "source_block_ids": ["az-001-l006"]
+        }
+      }
+    }
+  ],
+  "tables": [
+    {
+      "page_index": 0,
+      "table_id": "az-001-table-001",
+      "rows": [
+        ["품목", "금액"],
+        ["더미음료", "12000"]
+      ],
+      "confidence": 0.88,
+      "source_block_ids": ["az-001-l003"]
+    }
+  ],
+  "warnings": []
+}

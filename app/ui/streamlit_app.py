@@ -48,6 +48,8 @@ PREVIEW_COLUMNS = [
 RECEIPT_EXTENSIONS = {".jpg", ".jpeg", ".png", ".pdf"}
 CARD_STATEMENT_EXTENSIONS = {".xlsx", ".csv"}
 EXPORT_MIME_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+RUNTIME_PROVIDER_CURRENT = "__current__"
+RUNTIME_OCR_PROVIDER_OPTIONS = (RUNTIME_PROVIDER_CURRENT, "mock", "azure")
 
 
 @dataclass(frozen=True)
@@ -91,6 +93,9 @@ def render_new_job_view() -> None:
     st.caption("업로드한 증빙을 설정된 OCR provider와 규칙 기반 파서로 정리한 뒤, 사용자가 검수해 표준 엑셀 정리 파일을 만듭니다.")
     st.caption(f"현재 OCR provider: {get_config().ocr_provider}")
 
+    config = get_config()
+    selected_provider_name = render_runtime_ocr_provider_selector(config.ocr_provider)
+
     file_store = FileStore()
     session_id = ensure_session_id(file_store)
 
@@ -118,7 +123,12 @@ def render_new_job_view() -> None:
             with st.status("파일 저장 및 처리 중입니다.", expanded=True) as status:
                 status.write("업로드 파일을 안전하게 저장하는 중입니다.")
                 progress.progress(15, text="업로드 파일 저장 중입니다.")
-                result = save_and_process_uploaded_files(uploaded_files or [], file_store=file_store, session_id=session_id)
+                result = save_and_process_uploaded_files(
+                    uploaded_files or [],
+                    file_store=file_store,
+                    session_id=session_id,
+                    ocr_provider_name=selected_provider_name,
+                )
 
                 status.write("OCR/Parser 처리 결과를 정리하는 중입니다.")
                 progress.progress(85, text="OCR/Parser 처리 결과를 정리하는 중입니다.")
@@ -324,6 +334,7 @@ def save_and_process_uploaded_files(
     *,
     file_store: FileStore,
     session_id: str,
+    ocr_provider_name: str | None = None,
 ) -> ProcessingPipelineResult:
     uploaded_metadata: list[StoredFileMetadata] = []
     errors: list[str] = []
@@ -334,7 +345,11 @@ def save_and_process_uploaded_files(
         except FileStoreError as exc:
             errors.append(f"{_display_file_name(str(getattr(uploaded_file, 'name', 'uploaded_file')))}: {exc}")
 
-    processed = process_uploaded_file_metadata(uploaded_metadata, file_store=file_store)
+    processed = process_uploaded_file_metadata(
+        uploaded_metadata,
+        file_store=file_store,
+        ocr_provider_name=ocr_provider_name,
+    )
     return ProcessingPipelineResult(
         uploaded_file_metadata=uploaded_metadata,
         receipt_records=processed.receipt_records,
@@ -349,10 +364,15 @@ def process_uploaded_file_metadata(
     uploaded_metadata: Iterable[StoredFileMetadata],
     *,
     file_store: FileStore | None = None,
+    ocr_provider_name: str | None = None,
 ) -> ProcessingPipelineResult:
     metadata_list = list(uploaded_metadata)
     routed = route_uploaded_files_by_extension(metadata_list)
-    receipt_result = process_receipt_files_with_mock_ocr(routed.receipt_files, file_store=file_store)
+    receipt_result = process_receipt_files_with_mock_ocr(
+        routed.receipt_files,
+        file_store=file_store,
+        ocr_provider_name=ocr_provider_name,
+    )
     card_result = process_card_statement_files(routed.card_statement_files, file_store=file_store)
 
     receipt_records = DuplicateChecker().check(receipt_result.receipt_records)
@@ -400,6 +420,7 @@ def process_receipt_files_with_mock_ocr(
     *,
     file_store: FileStore | None = None,
     ocr_provider: OCRProvider | None = None,
+    ocr_provider_name: str | None = None,
 ) -> ReceiptProcessingResult:
     parser = ReceiptParser()
     validator = ReceiptValidator()
@@ -407,7 +428,7 @@ def process_receipt_files_with_mock_ocr(
     ocr_results: list[OCRResult] = []
     errors: list[str] = []
     try:
-        provider = ocr_provider or get_ocr_provider()
+        provider = ocr_provider or get_ocr_provider(build_runtime_ocr_config(ocr_provider_name))
     except ConfigurationError as exc:
         return ReceiptProcessingResult(receipt_records=[], ocr_results=[], errors=[str(exc)])
 
@@ -424,6 +445,44 @@ def process_receipt_files_with_mock_ocr(
         receipt_records.append(validator.validate(parser.parse(ocr_result)))
 
     return ReceiptProcessingResult(receipt_records=receipt_records, ocr_results=ocr_results, errors=errors)
+
+
+def render_runtime_ocr_provider_selector(configured_provider: str | None) -> str:
+    labels = {
+        RUNTIME_PROVIDER_CURRENT: f"현재 설정 사용 ({configured_provider or 'mock'})",
+        "mock": "Mock OCR",
+        "azure": "Azure Document Intelligence",
+    }
+    selected = st.selectbox(
+        "이번 처리 OCR provider",
+        options=RUNTIME_OCR_PROVIDER_OPTIONS,
+        format_func=lambda value: labels.get(value, str(value)),
+        key="runtime_ocr_provider",
+    )
+    provider_name = resolve_runtime_ocr_provider_name(selected, configured_provider)
+    st.caption(f"이번 업로드 처리에 사용할 OCR provider: {provider_name}")
+    st.caption("PaddleOCR 실제 실행은 설정 화면의 opt-in smoke test에서 별도로 확인합니다.")
+    return provider_name
+
+
+def resolve_runtime_ocr_provider_name(selection: str | None, configured_provider: str | None) -> str:
+    safe_configured_provider = (configured_provider or "mock").strip().lower() or "mock"
+    safe_selection = (selection or RUNTIME_PROVIDER_CURRENT).strip().lower()
+    if safe_selection == RUNTIME_PROVIDER_CURRENT:
+        return safe_configured_provider
+    if safe_selection in {"mock", "azure"}:
+        return safe_selection
+    return safe_configured_provider
+
+
+def build_runtime_ocr_config(provider_name: str | None):
+    config = get_config()
+    if provider_name is None:
+        return config
+    selected_provider = provider_name.strip().lower()
+    if not selected_provider or selected_provider == config.ocr_provider:
+        return config
+    return replace(config, ocr_provider=selected_provider)
 
 
 def process_card_statement_files(

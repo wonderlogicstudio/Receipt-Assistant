@@ -91,6 +91,20 @@ def make_sample_file(tmp_path: Path, name: str = "receipt.jpg") -> Path:
     return path
 
 
+def test_azure_provider_can_ignore_environment_proxy_settings() -> None:
+    session = requests.Session()
+    config = AppConfig(
+        ocr_provider="azure",
+        azure_document_intelligence_endpoint="https://example.cognitiveservices.azure.com/",
+        azure_document_intelligence_key="not-a-real-credential",
+        azure_ocr_ignore_env_proxy=True,
+    )
+
+    provider = AzureDocumentIntelligenceProvider(config, session=session)
+
+    assert provider.session.trust_env is False
+
+
 def success_payload():
     return {
         "status": "succeeded",
@@ -434,6 +448,24 @@ def test_azure_provider_auth_errors_are_not_retried(tmp_path, status_code):
     assert result.status == OCRStatus.FAILED.value
     assert result.diagnostic_code == f"analyze_http_{status_code}"
     assert len(session.post_calls) == 1
+
+
+def test_azure_provider_reports_safe_quota_detail_for_403(tmp_path):
+    session = FakeSession(
+        post_response=FakeResponse(
+            status_code=403,
+            payload={"error": {"code": "403", "message": "Quota limit exceeded."}},
+        )
+    )
+    provider = make_provider(session)
+
+    result = provider.extract(make_sample_file(tmp_path))
+
+    assert result.status == OCRStatus.FAILED.value
+    assert result.diagnostic_code == "analyze_http_403"
+    assert result.diagnostic_detail_code == "quota_or_rate_limit"
+    serialized = f"{result.error_message} {result.diagnostic_code} {result.diagnostic_detail_code}"
+    assert "Quota limit exceeded" not in serialized
 
 
 def test_azure_provider_poll_attempt_limit_returns_failed_result(tmp_path):

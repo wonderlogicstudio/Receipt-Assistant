@@ -1,0 +1,17 @@
+{
+  "source_file_name": "receipt_001.jpg",
+  "evidence_type": "receipt_image",
+  "transaction_date": "2026-05-14",
+  "merchant_name": "스타벅스 테스트점",
+  "total_amount": 12000,
+  "supply_amount": 10909,
+  "vat_amount": 1091,
+  "estimated_supply_amount": null,
+  "estimated_vat_amount": null,
+  "payment_method": "card",
+  "recommended_expense_category": "복리후생비",
+  "review_status": "needs_review",
+  "card_match_status": "unmatched",
+  "export_included": true,
+  "ocr_provider": "mock"
+}

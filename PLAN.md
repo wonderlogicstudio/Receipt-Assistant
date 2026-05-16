@@ -112,3 +112,215 @@
 | 엑셀 컬럼 조정 | 세무사 전달용 정리 파일로 충분한지 |
 | 실제 OCR provider 운영 옵션 | mock 데모만으로 부족한 피드백이 반복되는지 |
 | 처리 이력 상세 UX 개선 | 재다운로드 외 조회 요구가 있는지 |
+
+## 6주차 이후 아키텍처 전환 계획
+
+아래 계획은 1~5주차 MVP 완료 내역을 유지한 뒤 진행할 후속 아키텍처 정리입니다. 모든 항목은 아직 예정/계획 상태이며, 완료로 표시하지 않습니다.
+
+| 주차 | 주제 | 상태 | 계획 |
+|---|---|---|---|
+| 6주차 | StandardOCRResult 표준 정의 | 예정 | `docs/standard_ocr_result_schema.md` 생성, SPEC.md에 `StandardOCRResult` 추가, DECISIONS.md에 Provider 표준화 ADR 추가, `tests/fixtures/standard_ocr_result/`와 `tests/fixtures/expected_receipt_record/` 샘플 JSON 추가 |
+| 7주차 | Azure Adapter 표준화 | 예정 | Azure raw response를 `StandardOCRResult`로 변환하고, Azure 구조화 필드는 `key_value_candidates`와 `table_candidates`에 매핑하며 raw JSON 전체 미노출 원칙과 기존 Azure Provider 동작을 유지 |
+| 8주차 | Parser/Validator 표준 입력화 | 예정 | `ReceiptParser`가 `StandardOCRResult`를 입력으로 받도록 정리하고, Parser가 Azure/PaddleOCR/ML Kit 원본 응답을 직접 보지 않게 하며 fixture 기반 Parser 테스트 추가 |
+| 9주차 | PaddleOCR Local Provider PoC | 예정 | `OCR_PROVIDER=paddle` 후보를 추가하고, `PaddleOCRProvider`는 `StandardOCRResult`를 반환하도록 설계하며 PaddleOCR 미설치 환경에서도 기본 pytest가 실패하지 않게 구성 |
+| 10주차 | Azure vs PaddleOCR 품질 비교 | 예정 | 같은 영수증 샘플로 날짜/상호/총금액/부가세/사업자번호/검토필요 건수, 평균 처리시간, 실패율을 비교하고 Azure fallback 기준 정리 |
+| 11주차 | Local OCR Runtime / PC 설치형 구조 설계 | 예정 | 웹은 입력/검수 UI로 유지하고, OCR은 PC Local Runtime에서 수행하는 구조를 검토하며 PaddleOCR Local Edition, Docker Compose Edition, Tauri/Electron Desktop 후보 비교 |
+| 12주차 | 모바일 OCR 결과 포맷 설계 | 예정 | 모바일 앱도 `StandardOCRResult`를 생성하도록 하고, Android ML Kit과 iOS Apple Vision Adapter 전략을 문서화하며 앱은 촬영/인식/간단 검수/공유 중심으로 제한 |
+| 13주차 | 웹/앱/PC 통합 파일럿 준비 | 예정 | Azure 웹 MVP, PaddleOCR Local Web/PC Edition, 모바일 OCR 결과 import 흐름을 비교하는 파일럿 시나리오 준비 |
+
+### 6주차 산출물
+
+- `StandardOCRResult` 개념 정의
+- `StandardOCRResult` 필드 초안
+- `StandardOCRResult` Pydantic 모델 초안
+- Mock/Azure-like/edge-case Golden Fixture 초안
+- Fixture 로딩과 보안 금지 문자열 테스트
+- 6주차-A: `StandardOCRResult` 문서 계약 정의
+- 6주차-B: `StandardOCRResult` 모델과 fixture 초안 추가
+- 6주차-C: Parser 전환 전략과 `StandardOCRParserContext` 테스트 경계 정의
+- `StandardOCRParserContext` 준비
+- Parser 전환 계획 문서
+- fixture 기반 parser context 테스트
+- Provider Adapter Contract
+- Golden Fixture Comparison Strategy
+- 7주차 Azure Adapter 작업 기준
+- 8주차 Parser 정리 기준
+- Provider Adapter 책임 범위 정의
+- Parser 입력 기준 정의
+- Golden Test Fixture 전략 정의
+- 보안/민감정보 비노출 기준 재확인
+
+### 6주차에서 하지 않는 것
+
+- `PaddleOCRProvider` 구현
+- `TesseractProvider` 구현
+- ML Kit 앱 구현
+- Apple Vision 앱 구현
+- Local OCR Runtime 구현
+- FastAPI 서버 구현
+- Tauri/Electron 앱 구현
+- 기존 `ExcelExporter` 대규모 변경
+- 기존 `ReceiptRecord` 대규모 변경
+
+### 7주차 세부 계획
+
+| 단계 | 주제 | 상태 | 산출물 |
+|---|---|---|---|
+| 7주차-A | Azure Adapter 계약/문서 보완 | 계획 | Azure Adapter Contract, `provider_fields` 매핑 기준, Azure raw JSON 전체 미노출 기준, Azure raw text 전체 미노출 기준, `operation_location` 전체 URL 미저장 기준, 기존 Azure Provider 동작 유지 원칙, 7주차-B 구현 범위, 7주차-C 연결 검토 기준, 8주차 Parser 전환과의 경계 정의 |
+| 7주차-B | AzureStandardOCRAdapter 구현 및 fixture 테스트 | 진행 | `app/ocr/adapters/azure_standard_adapter.py` 추가, sanitized Azure fixture 3종 기반 단위 테스트, `StandardOCRResult` 생성 검증, `provider_fields` 비민감 metadata 검증, raw JSON/raw text/`operation_location` 전체 URL 미노출 테스트 |
+| 7주차-C | 기존 Azure Provider와 Adapter 연결 준비/회귀 테스트 | 진행 | Azure Adapter integration contract test, Azure Provider regression test, 선택적 bridge/helper 추가, 기존 `AzureProvider.extract()`의 `OCRResult` 반환값 유지 확인, 8주차 Parser 전환 진입 조건 정리 |
+
+8주차 Parser 전환 시작 조건:
+
+- 7주차 Adapter 테스트 통과
+- Azure Provider 회귀 테스트 통과
+- 기존 end-to-end export flow 테스트 통과
+- Parser context 보안 테스트 통과
+- 기존 `AzureProvider.extract()` 반환값과 기존 Parser/Exporter/DB/UI 흐름 유지 확인
+
+### 8주차 세부 계획: Parser/Validator 표준 입력화
+
+| 단계 | 주제 | 상태 | 산출물 |
+|---|---|---|---|
+| 8주차-A | Parser 표준 입력 전환 계약/문서 보완 | 진행 | Parser 표준 입력 계약, legacy raw_text Parser compatibility 원칙, `StandardOCRParserContext` 기반 Parser entry 후보, fixture 기반 Parser 테스트 기준, downstream 회귀 점검 기준, rollback 기준 |
+| 8주차-B | `StandardOCRParserContext` 기반 `ReceiptParser` entry 추가 | 예정 | 기존 `ReceiptParser` public interface 유지, 새 entry 후보 `parse_standard_context(context: StandardOCRParserContext) -> ReceiptRecord` 또는 `parse_from_standard_ocr(result: StandardOCRResult) -> ReceiptRecord` 검토, 기존 raw_text 기반 Parser 경로 유지, 기존 `ReceiptRecord` 반환 구조 유지 |
+| 8주차-C | fixture 기반 Parser 결과 비교 테스트 | 예정 | mock/azure-like/edge-case standard fixture, AzureStandardOCRAdapter output 기반 parser context 테스트, legacy raw_text Parser 결과와 standard context Parser 결과의 핵심 필드 비교 |
+| 8주차-D | Validator/CategoryRules/CardMatcher/ExcelExporter/Processing History 회귀 점검 | 예정 | ReceiptValidator, CategoryRules, CardMatcher, ExcelExporter, Processing History 저장/조회, end-to-end export flow 유지 확인 |
+
+8주차-A에서 하지 않는 것:
+
+- `ReceiptParser` 코드 변경
+- Parser public interface 변경
+- Azure Provider 변경
+- AzureStandardOCRAdapter 변경
+- ExcelExporter 변경
+- Processing History DB 변경
+- Streamlit UI 변경
+## Week 8-B Implementation Note
+
+- Status: implemented as an isolated parser entry.
+- Added `ReceiptParser.parse_standard_context(context: StandardOCRParserContext, ...) -> ReceiptRecord`.
+- Added `ReceiptParser.parse_from_standard_ocr(result: StandardOCRResult, ...) -> ReceiptRecord` as a wrapper through `StandardOCRParserContext`.
+- Added fixture-based smoke tests for mock, azure-like, edge-case, Azure adapter output, failed diagnostic, security, compatibility, and runtime non-wiring.
+- Existing raw_text parser path, Azure Provider, Mock Provider, AzureStandardOCRAdapter, ExcelExporter, Processing History DB, and Streamlit UI remain unchanged.
+- Week 8-C remains: deeper fixture-based comparison between legacy raw_text parsing and standard context parsing.
+- Week 8-D remains: downstream regression check for Validator, CategoryRules, CardMatcher, ExcelExporter, and Processing History.
+
+## Week 8-C Implementation Note
+
+- Status: implemented as fixture-based parser comparison tests.
+- Added standard parser comparison coverage for mock, azure-like, edge-case, and Azure adapter sanitized fixtures.
+- Added limited legacy raw_text fixtures for core-field comparison without storing full OCR raw text.
+- Verified non-amount candidate defense for quantity, approval number, footer number, and business number.
+- Verified `vat_missing` and `vat_review_hint` remain review hints and are not explicit `vat_amount`.
+- Verified parser output does not copy `provider_fields` raw metadata or expose raw payload/security/path patterns.
+- Existing raw_text parser path, Parser public interface, Provider code, AzureStandardOCRAdapter, ExcelExporter, Processing History DB, and Streamlit UI remain unchanged.
+- Week 8-D remains: downstream regression check for Validator, CategoryRules, CardMatcher, ExcelExporter, Processing History, and end-to-end export flow.
+
+## Week 8-D Implementation Note
+
+- Status: implemented as downstream regression safeguards.
+- Added Standard Parser downstream regression coverage for ReceiptValidator, CategoryRules, CardMatcher, ExcelExporter, Processing History, provider independence, and existing end-to-end export flow.
+- Verified StandardOCRParserContext-based `ReceiptRecord` objects can pass through existing downstream services without provider raw response, `provider_fields` raw metadata, raw OCR text, raw JSON, absolute local paths, endpoint, operation location, or secret exposure.
+- Verified `provider="paddleocr"` candidate records are treated as ordinary `ReceiptRecord` inputs by downstream services; no PaddleOCRProvider or `paddleocr` dependency was added.
+- Existing raw_text parser path, Parser public interface, Provider code, AzureStandardOCRAdapter, ExcelExporter sheet/column structure, Processing History DB schema, and Streamlit UI remain unchanged.
+- 9주차 PaddleOCR Local Provider PoC can begin after the full regression suite remains passing.
+
+## Week 9 Detailed Plan: PaddleOCR Local Provider PoC
+
+The Week 9 work is a PoC for local OCR provider expansion. It does not replace the default provider, does not change the existing Parser/Validator/Exporter flow, and does not make PaddleOCR a required dependency.
+
+| Step | Topic | Status | Deliverables |
+|---|---|---|---|
+| 9주차-A | PaddleOCR Local Provider 계약/문서 보완 | 완료 | `OCR_PROVIDER=paddle` 후보 정의, `PaddleOCRProvider` 계약, `PaddleStandardOCRAdapter` 계약, `StandardOCRResult` 반환 원칙, lazy import 원칙, paddleocr 미설치 환경 기본 pytest 통과 원칙, 이미지 우선 PoC 범위, PDF 후속 처리 원칙, opt-in 실제 OCR 테스트 전략, 10주차 Azure vs PaddleOCR 품질 비교 준비 기준 |
+| 9주차-B | PaddleOCR-like Adapter 및 sanitized fixture 테스트 | 완료 | PaddleOCR-like sanitized fixture 생성, `PaddleStandardOCRAdapter` 구현, PaddleOCR-like result to `StandardOCRResult` 변환 테스트, `provider_fields` 비민감 metadata 검증, raw output 전체 미노출 테스트, 실제 paddleocr 호출 없음, `requirements.txt` 변경 없음 |
+| 9주차-C | Optional PaddleOCRProvider 구현과 provider factory 후보 추가 | 완료 | optional `PaddleOCRProvider`, `OCR_PROVIDER=paddle` 후보, provider factory 후보 연결, paddleocr 미설치 시 명확한 failed/skipped 처리, lazy import, 기본 pytest 실패 방지, Parser/Validator/Exporter 변경 없음 |
+| 9주차-D | 이미지 기준 opt-in Local OCR smoke test와 회귀 점검 | 완료 | `RUN_PADDLEOCR_TESTS=1` 같은 opt-in 실제 이미지 smoke test, 기본 pytest 제외, PDF 후속 처리, mock/Azure/standard parser/downstream 회귀 확인, 10주차 품질 비교 결과 기록 기준 정리 |
+
+Week 9-A does not implement:
+
+- `PaddleOCRProvider`
+- `PaddleStandardOCRAdapter`
+- `paddleocr` dependency installation
+- provider factory code changes
+- actual PaddleOCR import or execution
+- image/PDF OCR fixture additions
+- PDF conversion or PDF OCR handling
+- Parser, Validator, CategoryRules, CardMatcher, ExcelExporter, Processing History DB, Streamlit UI, AzureProvider, MockProvider, or AzureStandardOCRAdapter changes
+
+### 9주차-B 산출물
+
+- Added `app/ocr/adapters/paddle_standard_adapter.py` with `PaddleStandardOCRAdapter` for sanitized PaddleOCR-like mapping input only.
+- Added sanitized Paddle fixture files for regular, edge, and empty/failed image-style results under `tests/fixtures/paddle/`.
+- Added `tests/test_paddle_standard_adapter.py` covering `StandardOCRResult` conversion, `provider_fields` safety, candidate separation, bbox/confidence normalization, parser context conversion, standard parser entry readiness, and Azure/Paddle shape comparability.
+- The adapter uses `provider="paddleocr"` and `provider_fields.provider_family="paddleocr"`; `OCR_PROVIDER=paddle` remains a future provider factory candidate for 9주차-C.
+- No `PaddleOCRProvider`, actual `paddleocr` import, real OCR execution, PDF handling, provider factory connection, default provider change, or `requirements.txt` change is included.
+
+### 9주차-C 산출물
+
+- Status: implemented as an optional provider candidate.
+- Added `app/ocr/paddle_provider.py` with `PaddleOCRProvider`, returning `StandardOCRResult` through `PaddleStandardOCRAdapter`.
+- Added `OCR_PROVIDER=paddle` and optional `OCR_PROVIDER=paddleocr` alias handling in the provider factory without changing the default provider.
+- `paddleocr` is lazy-imported only at execution time; importing the provider and running default pytest do not require the package.
+- Missing `paddleocr` returns a failed `StandardOCRResult` with a non-sensitive diagnostic code such as `paddle_not_installed`.
+- PDF input returns an unsupported/deferred `StandardOCRResult`; PDF conversion is not implemented in this step.
+- Added optional provider and provider factory tests without real OCR execution, image fixtures, customer files, or `requirements.txt` changes.
+- Parser, Validator, CategoryRules, CardMatcher, ExcelExporter, Processing History DB, Streamlit UI, AzureProvider, MockProvider, and AzureStandardOCRAdapter remain unchanged.
+- Week 9-D remains: opt-in real image OCR smoke test and regression check.
+
+### 9주차-D 산출물
+
+- Status: implemented as an opt-in smoke test scaffold and regression check.
+- Added `tests/integration/test_paddle_ocr_provider_smoke.py`.
+- The real image smoke test runs only when `RUN_PADDLEOCR_TESTS` is explicitly enabled and `PADDLEOCR_TEST_IMAGE_PATH` points to an existing local image.
+- Without opt-in variables, the real OCR smoke test is skipped during default pytest.
+- The smoke test validates `PaddleOCRProvider` to `StandardOCRResult`, `StandardOCRParserContext`, and the standard parser entry without checking OCR quality.
+- PDF input remains unsupported/deferred and is covered without PDF conversion.
+- Added `tests/fixtures/paddle_smoke/` guidance files; no real image or customer file is committed.
+- Week 10 remains: Azure vs PaddleOCR quality comparison by `StandardOCRResult`, parser context, and core `ReceiptRecord` fields.
+
+## Week 10 Detailed Plan: Azure vs PaddleOCR 품질 비교
+
+Week 10 work compares provider quality without changing the default provider, ExcelExporter structure, Processing History schema, or Parser raw-input boundary.
+
+| Step | Topic | Status | Deliverables |
+|---|---|---|---|
+| 10주차-A | 품질 비교 계약/문서 보완 | 완료 | `docs/ocr_quality_comparison_contract.md` 추가, 비교 입력 계층 정의, 핵심 필드/리포트 행 계약 정의, expected fixture 전략, 비민감 데이터 원칙, fallback 후보 조건 초안, B/C/D 범위 분리 |
+| 10주차-B | 안전한 OCR 미리보기 구현 | 완료 | `StandardOCRResult.text_blocks` 기반 top-N safe preview, confidence/low-confidence/redaction 표시, PaddleOCR smoke path UI 표시 |
+| 10주차-C | Azure vs PaddleOCR side-by-side 비교 리포트 구현 | 완료 | 같은 샘플을 provider별 결과로 묶어 핵심 `ReceiptRecord` 필드, OCR 상태, candidate count, review hint count, 처리시간, field present/same/match status 비교 |
+| 10주차-D | 통계 요약과 Azure fallback 기준 정리 | 예정 | 샘플별/Provider별 실패율, 핵심 필드 누락률, 평균 처리시간, 검토필요율 요약과 Azure fallback 후보 기준 문서화 |
+
+10주차-A does not implement:
+
+- 안전한 OCR 미리보기 UI
+- side-by-side comparison report code
+- statistics aggregation code
+- automatic Azure fallback execution
+- PDF PaddleOCR handling
+- Provider 변경 UI
+- ExcelExporter sheet/column changes
+- Processing History DB schema changes
+- real Azure or real PaddleOCR execution in default pytest
+
+10-week-B safe preview implementation note:
+
+- Status: implemented as a safe preview layer, not a quality report layer.
+- `app/ui/ocr_preview_utils.py` builds preview rows and summary from `StandardOCRResult.text_blocks`.
+- The Settings PaddleOCR smoke-test box displays the existing smoke summary plus a limited safe preview table.
+- Azure adapter output can use the same preview utility through `StandardOCRResult`; no Azure API execution is added.
+- 10-B still does not implement side-by-side reports, statistics aggregation, `field_match_score`, fallback automation, default provider changes, ExcelExporter changes, Processing History schema changes, or PDF PaddleOCR handling.
+
+Expected fixture strategy for Week 10:
+
+- Expected fixture is based on core `ReceiptRecord` fields, not provider raw output.
+- Same safe `sample_id` should connect Azure, PaddleOCR, and expected core-field results.
+- Fixture content must use synthetic or non-sensitive samples only.
+- File names are allowed; full local paths are not.
+- PDF PaddleOCR expected fixtures remain deferred until PDF handling is explicitly scoped.
+## Week 10-B/C Status Sync
+
+- Week 10-B is implemented: safe OCR preview rows and summary are available from `app/ui/ocr_preview_utils.py`, and the PaddleOCR smoke path can show top-N safe text block previews without exposing full OCR text.
+- Week 10-C is implemented as a per-sample side-by-side report in the settings diagnostics flow. It compares Azure and PaddleOCR only through `StandardOCRResult`, `StandardOCRParserContext`, and `ReceiptParser.parse_standard_context()` output.
+- Week 10-C includes safe provider diagnostics such as `diagnostic_code` and sanitized `diagnostic_detail_code`. In local sample testing, PaddleOCR completed 10/10 image runs, while Azure may return `analyze_http_403` with `quota_or_rate_limit` when the Azure resource is currently rate-limited or quota-limited.
+- PaddleOCR candidate hints are intentionally conservative. They may add obvious date, business number, payment method, and labeled amount candidates, but they do not guess merchant names or infer totals from unlabeled maximum amounts.
+- Week 10-D remains planned. Aggregated statistics, average processing time summaries, failure-rate summaries, field match-rate summaries, formal `field_match_score`, and fallback recommendation rules are intentionally deferred.

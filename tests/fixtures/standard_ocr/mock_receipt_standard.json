@@ -1,0 +1,141 @@
+{
+  "id": "standard_ocr_mock_001",
+  "source_file_id": "file_mock_001",
+  "source_file_name": "sample_receipt_001.png",
+  "provider": "mock",
+  "provider_version": "mock-v1",
+  "engine_runtime": "mock",
+  "status": "completed",
+  "pages": [
+    {
+      "page_index": 0,
+      "width": 1080,
+      "height": 1920,
+      "unit": "pixel"
+    }
+  ],
+  "safe_text_summary": "테스트카페 영수증 요약. 사용일자 2026-05-14, 총금액 12000, 공급가액 10909, 부가세 1091, 결제수단 카드.",
+  "text_blocks": [
+    {
+      "page_index": 0,
+      "block_id": "b001",
+      "text": "테스트카페",
+      "normalized_text": "테스트카페",
+      "confidence": 0.98,
+      "bbox": [40, 120, 620, 170],
+      "line_order": 1,
+      "block_type": "line",
+      "sensitive_category": null
+    },
+    {
+      "page_index": 0,
+      "block_id": "b002",
+      "text": "사용일자 2026-05-14",
+      "normalized_text": "사용일자 2026-05-14",
+      "confidence": 0.96,
+      "bbox": [40, 210, 520, 250],
+      "line_order": 2,
+      "block_type": "line",
+      "sensitive_category": null
+    },
+    {
+      "page_index": 0,
+      "block_id": "b003",
+      "text": "총금액 12,000",
+      "normalized_text": "총금액 12000",
+      "confidence": 0.97,
+      "bbox": [40, 480, 440, 520],
+      "line_order": 3,
+      "block_type": "line",
+      "sensitive_category": null
+    },
+    {
+      "page_index": 0,
+      "block_id": "b004",
+      "text": "공급가액 10,909",
+      "normalized_text": "공급가액 10909",
+      "confidence": 0.94,
+      "bbox": [40, 530, 460, 570],
+      "line_order": 4,
+      "block_type": "line",
+      "sensitive_category": null
+    },
+    {
+      "page_index": 0,
+      "block_id": "b005",
+      "text": "부가세 1,091",
+      "normalized_text": "부가세 1091",
+      "confidence": 0.94,
+      "bbox": [40, 580, 410, 620],
+      "line_order": 5,
+      "block_type": "line",
+      "sensitive_category": null
+    },
+    {
+      "page_index": 0,
+      "block_id": "b006",
+      "text": "결제수단 카드",
+      "normalized_text": "결제수단 카드",
+      "confidence": 0.93,
+      "bbox": [40, 640, 410, 680],
+      "line_order": 6,
+      "block_type": "line",
+      "sensitive_category": null
+    }
+  ],
+  "key_value_candidates": [
+    {
+      "key": "merchant_name",
+      "value": "테스트카페",
+      "normalized_value": "테스트카페",
+      "confidence": 0.98,
+      "source_block_ids": ["b001"],
+      "candidate_type": "merchant_name"
+    },
+    {
+      "key": "transaction_date",
+      "value": "2026-05-14",
+      "normalized_value": "2026-05-14",
+      "confidence": 0.96,
+      "source_block_ids": ["b002"],
+      "candidate_type": "transaction_date"
+    },
+    {
+      "key": "total_amount",
+      "value": "12,000",
+      "normalized_value": "12000",
+      "confidence": 0.97,
+      "source_block_ids": ["b003"],
+      "candidate_type": "total_amount"
+    },
+    {
+      "key": "supply_amount",
+      "value": "10,909",
+      "normalized_value": "10909",
+      "confidence": 0.94,
+      "source_block_ids": ["b004"],
+      "candidate_type": "supply_amount"
+    },
+    {
+      "key": "vat_amount",
+      "value": "1,091",
+      "normalized_value": "1091",
+      "confidence": 0.94,
+      "source_block_ids": ["b005"],
+      "candidate_type": "vat_amount"
+    },
+    {
+      "key": "payment_method",
+      "value": "카드",
+      "normalized_value": "card",
+      "confidence": 0.93,
+      "source_block_ids": ["b006"],
+      "candidate_type": "payment_method"
+    }
+  ],
+  "table_candidates": [],
+  "confidence": 0.95,
+  "warnings": [],
+  "diagnostic_code": "completed",
+  "created_at": "2026-05-14T21:00:00+09:00"
+}

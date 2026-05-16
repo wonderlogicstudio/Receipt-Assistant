@@ -6,9 +6,10 @@ from app.core.exceptions import ConfigurationError
 from app.ocr.azure_provider import AzureDocumentIntelligenceProvider
 from app.ocr.base import OCRProvider
 from app.ocr.mock_provider import MockOCRProvider
+from app.ocr.paddle_provider import PaddleOCRProvider
 
 
-def get_ocr_provider(config: AppConfig | None = None) -> OCRProvider:
+def get_ocr_provider(config: AppConfig | None = None) -> OCRProvider | PaddleOCRProvider:
     safe_config = config or get_config()
     provider_name = (safe_config.ocr_provider or OCRProviderName.MOCK.value).strip().lower()
 
@@ -16,4 +17,6 @@ def get_ocr_provider(config: AppConfig | None = None) -> OCRProvider:
         return MockOCRProvider()
     if provider_name == OCRProviderName.AZURE.value:
         return AzureDocumentIntelligenceProvider(safe_config)
+    if provider_name in {OCRProviderName.PADDLE.value, OCRProviderName.PADDLEOCR.value}:
+        return PaddleOCRProvider()
     raise ConfigurationError(f"지원하지 않는 OCR provider입니다: {provider_name}")

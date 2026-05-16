@@ -1,0 +1,199 @@
+{
+  "id": "standard_ocr_edge_001",
+  "source_file_id": "file_edge_001",
+  "source_file_name": "sample_edge_case_receipt_001.png",
+  "provider": "mock",
+  "provider_version": "edge-fixture-v1",
+  "engine_runtime": "mock",
+  "status": "partial",
+  "pages": [
+    {
+      "page_index": 0,
+      "width": 1080,
+      "height": 1920,
+      "unit": "pixel"
+    }
+  ],
+  "safe_text_summary": "금액 오인식 방지용 더미 영수증 요약. 수량, 승인번호 후보, 푸터 숫자는 금액 후보와 분리. 할인 후 0원 결제와 부가세 미표기 검토 필요.",
+  "text_blocks": [
+    {
+      "page_index": 0,
+      "block_id": "b001",
+      "text": "수량 1",
+      "normalized_text": "수량 1",
+      "confidence": 0.88,
+      "bbox": null,
+      "line_order": 1,
+      "block_type": "line",
+      "sensitive_category": null
+    },
+    {
+      "page_index": 0,
+      "block_id": "b002",
+      "text": "수량 3",
+      "normalized_text": "수량 3",
+      "confidence": 0.88,
+      "bbox": null,
+      "line_order": 2,
+      "block_type": "line",
+      "sensitive_category": null
+    },
+    {
+      "page_index": 0,
+      "block_id": "b003",
+      "text": "수량 10",
+      "normalized_text": "수량 10",
+      "confidence": 0.88,
+      "bbox": null,
+      "line_order": 3,
+      "block_type": "line",
+      "sensitive_category": null
+    },
+    {
+      "page_index": 0,
+      "block_id": "b004",
+      "text": "승인번호 APPROVAL-TEST-42",
+      "normalized_text": "승인번호 APPROVAL-TEST-42",
+      "confidence": 0.85,
+      "bbox": null,
+      "line_order": 4,
+      "block_type": "line",
+      "sensitive_category": null
+    },
+    {
+      "page_index": 0,
+      "block_id": "b005",
+      "text": "푸터번호 REF-88",
+      "normalized_text": "푸터번호 REF-88",
+      "confidence": 0.82,
+      "bbox": null,
+      "line_order": 5,
+      "block_type": "line",
+      "sensitive_category": null
+    },
+    {
+      "page_index": 0,
+      "block_id": "b006",
+      "text": "결제대상금액 5,000",
+      "normalized_text": "결제대상금액 5000",
+      "confidence": 0.93,
+      "bbox": null,
+      "line_order": 6,
+      "block_type": "line",
+      "sensitive_category": null
+    },
+    {
+      "page_index": 0,
+      "block_id": "b007",
+      "text": "할인 후 실제결제금액 0",
+      "normalized_text": "할인 후 실제결제금액 0",
+      "confidence": 0.92,
+      "bbox": null,
+      "line_order": 7,
+      "block_type": "line",
+      "sensitive_category": null
+    },
+    {
+      "page_index": 0,
+      "block_id": "b008",
+      "text": "부가세 표시 없음",
+      "normalized_text": "부가세 표시 없음",
+      "confidence": 0.86,
+      "bbox": null,
+      "line_order": 8,
+      "block_type": "line",
+      "sensitive_category": null
+    }
+  ],
+  "key_value_candidates": [
+    {
+      "key": "quantity_line_1",
+      "value": "1",
+      "normalized_value": "1",
+      "confidence": 0.88,
+      "source_block_ids": ["b001"],
+      "candidate_type": "quantity"
+    },
+    {
+      "key": "quantity_line_2",
+      "value": "3",
+      "normalized_value": "3",
+      "confidence": 0.88,
+      "source_block_ids": ["b002"],
+      "candidate_type": "quantity"
+    },
+    {
+      "key": "quantity_line_3",
+      "value": "10",
+      "normalized_value": "10",
+      "confidence": 0.88,
+      "source_block_ids": ["b003"],
+      "candidate_type": "quantity"
+    },
+    {
+      "key": "approval_number",
+      "value": "APPROVAL-TEST-42",
+      "normalized_value": "APPROVAL-TEST-42",
+      "confidence": 0.85,
+      "source_block_ids": ["b004"],
+      "candidate_type": "approval_number"
+    },
+    {
+      "key": "footer_number",
+      "value": "REF-88",
+      "normalized_value": "REF-88",
+      "confidence": 0.82,
+      "source_block_ids": ["b005"],
+      "candidate_type": "footer_number"
+    },
+    {
+      "key": "final_amount",
+      "value": "5,000",
+      "normalized_value": "5000",
+      "confidence": 0.93,
+      "source_block_ids": ["b006"],
+      "candidate_type": "final_amount"
+    },
+    {
+      "key": "paid_amount",
+      "value": "0",
+      "normalized_value": "0",
+      "confidence": 0.92,
+      "source_block_ids": ["b007"],
+      "candidate_type": "paid_amount"
+    },
+    {
+      "key": "total_amount",
+      "value": "0",
+      "normalized_value": "0",
+      "confidence": 0.92,
+      "source_block_ids": ["b007"],
+      "candidate_type": "total_amount"
+    },
+    {
+      "key": "vat_review",
+      "value": "부가세 표시 없음",
+      "normalized_value": "missing",
+      "confidence": 0.86,
+      "source_block_ids": ["b008"],
+      "candidate_type": "vat_missing"
+    },
+    {
+      "key": "vat_review_hint",
+      "value": "명시 부가세 없음",
+      "normalized_value": "review_required",
+      "confidence": 0.86,
+      "source_block_ids": ["b008"],
+      "candidate_type": "vat_review_hint"
+    }
+  ],
+  "table_candidates": [],
+  "confidence": 0.88,
+  "warnings": [
+    "zero_paid_amount_requires_review",
+    "vat_missing_requires_review",
+    "non_amount_numeric_candidates_present"
+  ],
+  "diagnostic_code": "partial",
+  "created_at": "2026-05-14T21:10:00+09:00"
+}

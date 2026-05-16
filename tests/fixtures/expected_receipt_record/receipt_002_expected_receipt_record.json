@@ -1,0 +1,20 @@
+{
+  "source_file_name": "receipt_002.jpg",
+  "evidence_type": "receipt_image",
+  "transaction_date": "2026-05-14",
+  "merchant_name": "테스트문구점",
+  "gross_amount": 8000,
+  "discount_amount": 1000,
+  "final_amount": 7000,
+  "total_amount": 7000,
+  "supply_amount": null,
+  "vat_amount": null,
+  "estimated_supply_amount": 6364,
+  "estimated_vat_amount": 636,
+  "payment_method": null,
+  "recommended_expense_category": "소모품비",
+  "review_status": "needs_review",
+  "card_match_status": "unmatched",
+  "export_included": true,
+  "ocr_provider": "paddle"
+}
