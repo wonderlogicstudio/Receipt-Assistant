@@ -224,3 +224,15 @@ Azure failures may include a sanitized `diagnostic_detail_code`, for example `qu
 PaddleOCR now generates only conservative candidate hints from safe OCR lines: obvious dates, business numbers, payment methods, and labeled amounts. It does not guess merchant names or infer totals from unlabeled maximum amounts.
 
 Week 10-D remains the future step for statistics aggregation, average processing time, failure rate, field match-rate summaries, formal field match scoring, and Azure fallback policy rules. These are not automated by the Week 10-C report.
+
+### Review UX quality triage
+
+The review table now includes safe triage columns for review priority, missing
+core fields, and quality-check flags. Users can filter by review status or issue
+type and inspect one selected receipt through a safe detail panel that shows only
+the source file name, parsed core fields, and review reasons.
+
+This convenience layer is for manual review only. It does not display provider
+raw output, full OCR text, raw JSON, full local paths, secrets, or endpoint URLs,
+and it does not change OCR provider selection, Excel export sheets/columns, or
+Processing History schema.

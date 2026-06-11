@@ -18,7 +18,10 @@ from app.ui.review_utils import (
     COL_AMOUNT_WARNINGS,
     COL_MERCHANT,
     COL_PAID_AMOUNT,
+    COL_MISSING_FIELDS,
+    COL_QUALITY_FLAGS,
     COL_RECOMMENDED_CATEGORY,
+    COL_REVIEW_PRIORITY,
     COL_REVIEW_REASON,
     COL_REVIEW_STATUS,
     COL_SENSITIVE_CATEGORIES,
@@ -34,11 +37,19 @@ from app.ui.review_utils import (
     STATUS_LABEL_APPROVED,
     STATUS_LABEL_EXCLUDED,
     STATUS_LABEL_NEEDS_REVIEW,
+    ISSUE_CARD_UNMATCHED,
+    ISSUE_MERCHANT_MISSING,
+    ISSUE_TOTAL_MISSING,
+    REVIEW_FILTER_NEEDS_REVIEW,
     build_review_summary,
+    filter_receipt_records_for_review,
     is_excluded_record,
     map_review_label_to_status,
     map_review_status_to_label,
+    merge_reviewed_records,
     receipt_records_to_review_dataframe,
+    review_issue_labels,
+    review_priority_label,
     review_dataframe_to_receipt_records,
 )
 
@@ -123,6 +134,9 @@ def test_review_dataframe_contains_required_display_columns():
 
     expected_columns = {
         COL_DATE,
+        COL_REVIEW_PRIORITY,
+        COL_MISSING_FIELDS,
+        COL_QUALITY_FLAGS,
         COL_MERCHANT,
         COL_TOTAL,
         COL_GROSS_AMOUNT,
@@ -380,3 +394,58 @@ def test_review_dataframe_does_not_include_raw_ocr_text():
 
     assert "ocr_raw_text" not in dataframe.columns
     assert "raw_text" not in dataframe.columns
+
+
+def test_review_dataframe_shows_quality_flags_for_missing_fields():
+    receipt = replace(make_receipt(), merchant_name=None, total_amount=None)
+
+    dataframe = receipt_records_to_review_dataframe([receipt])
+
+    assert dataframe.loc[0, COL_REVIEW_PRIORITY] == "높음"
+    assert "상호" in dataframe.loc[0, COL_MISSING_FIELDS]
+    assert "총액" in dataframe.loc[0, COL_MISSING_FIELDS]
+    assert ISSUE_MERCHANT_MISSING in dataframe.loc[0, COL_QUALITY_FLAGS]
+    assert ISSUE_TOTAL_MISSING in dataframe.loc[0, COL_QUALITY_FLAGS]
+
+
+def test_review_issue_labels_include_card_unmatched_without_sensitive_values():
+    receipt = make_receipt(card_match_status=CardMatchStatus.UNMATCHED.value)
+
+    labels = review_issue_labels(receipt)
+
+    assert ISSUE_CARD_UNMATCHED in labels
+    assert "raw_text" not in " ".join(labels)
+
+
+def test_filter_receipt_records_for_review_filters_by_status_and_issue():
+    clean = make_receipt(review_status=ReviewStatus.APPROVED.value, card_match_status=CardMatchStatus.MATCHED.value)
+    missing = replace(make_receipt(), merchant_name=None)
+    excluded = make_receipt(review_status=ReviewStatus.EXCLUDED.value)
+
+    filtered = filter_receipt_records_for_review(
+        [clean, missing, excluded],
+        status_filter=REVIEW_FILTER_NEEDS_REVIEW,
+        issue_filters=[ISSUE_MERCHANT_MISSING],
+    )
+
+    assert filtered == [missing]
+
+
+def test_merge_reviewed_records_preserves_hidden_filter_rows():
+    first = make_receipt()
+    second = replace(make_receipt(), source_file_id="source-file-2")
+    reviewed_second = replace(second, merchant_name="수정상호")
+
+    merged = merge_reviewed_records([first, second], [reviewed_second])
+
+    assert merged[0] == first
+    assert merged[1].merchant_name == "수정상호"
+
+
+def test_review_priority_label_marks_complete_approved_record_done():
+    receipt = make_receipt(
+        review_status=ReviewStatus.APPROVED.value,
+        card_match_status=CardMatchStatus.MATCHED.value,
+    )
+
+    assert review_priority_label(receipt) == "완료"

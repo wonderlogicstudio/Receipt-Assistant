@@ -324,3 +324,11 @@ Expected fixture strategy for Week 10:
 - Week 10-C includes safe provider diagnostics such as `diagnostic_code` and sanitized `diagnostic_detail_code`. In local sample testing, PaddleOCR completed 10/10 image runs, while Azure may return `analyze_http_403` with `quota_or_rate_limit` when the Azure resource is currently rate-limited or quota-limited.
 - PaddleOCR candidate hints are intentionally conservative. They may add obvious date, business number, payment method, and labeled amount candidates, but they do not guess merchant names or infer totals from unlabeled maximum amounts.
 - Week 10-D remains planned. Aggregated statistics, average processing time summaries, failure-rate summaries, field match-rate summaries, formal `field_match_score`, and fallback recommendation rules are intentionally deferred.
+
+## Review UX Quality Triage
+
+- Status: implemented as a manual review convenience layer.
+- Scope: the review screen adds priority, missing-field, and quality-check indicators derived from `ReceiptRecord`, plus status/issue filters and a safe selected-receipt detail panel.
+- Purpose: help users quickly find records with missing merchant, date, business number, total amount, payment method, VAT review, sensitive-text, discount/zero-payment, or card-matching issues.
+- Safety: the detail panel shows only safe parsed fields and source file names, not provider raw output, full OCR text, raw JSON, full local paths, secrets, or endpoint URLs.
+- Out of scope: OCR reprocessing, automatic fallback, formal scoring, aggregate statistics UI, ExcelExporter sheet/column changes, Processing History schema changes, and provider default changes.

@@ -423,3 +423,11 @@ python -m pytest tests/test_settings_utils.py
 - [x] No raw provider output, full OCR text, raw JSON, full local paths, Azure endpoint URLs, operation URLs, secrets, raw tracebacks, customer files, or raw OCR fixtures are added.
 - [x] No default pytest path calls real Azure or real PaddleOCR.
 - [ ] Week 10-D statistics, formal score, aggregate fallback criteria, and fallback recommendation rules remain unimplemented by design.
+
+## Review UX Quality Triage
+
+- [x] Review table shows manual triage columns for priority, missing fields, and quality-check flags.
+- [x] Review screen supports status and issue filters without dropping hidden rows when edits are saved.
+- [x] Selected-receipt detail panel shows only safe parsed fields and source file names.
+- [x] Detail and table views do not expose provider raw output, full OCR text, raw JSON, full local paths, secrets, or endpoint URLs.
+- [x] ExcelExporter sheets/columns, Processing History schema, default provider, automatic fallback, formal score, and statistics UI remain unchanged.

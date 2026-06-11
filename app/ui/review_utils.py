@@ -49,12 +49,52 @@ COL_CARD_MATCH_REASON = "카드매칭사유"
 COL_DUPLICATE_SUSPECTED = "중복의심여부"
 COL_SOURCE_FILE_NAME = "원본파일명"
 COL_USER_NOTE = "비고"
+COL_REVIEW_PRIORITY = "검토우선순위"
+COL_MISSING_FIELDS = "누락필드"
+COL_QUALITY_FLAGS = "품질체크"
+
+REVIEW_FILTER_ALL = "전체"
+REVIEW_FILTER_NEEDS_REVIEW = "검토필요"
+REVIEW_FILTER_APPROVED = "확인완료"
+REVIEW_FILTER_EXCLUDED = "제외"
+
+ISSUE_MERCHANT_MISSING = "상호 누락"
+ISSUE_DATE_MISSING = "날짜 누락"
+ISSUE_BUSINESS_NUMBER_MISSING = "사업자번호 누락"
+ISSUE_TOTAL_MISSING = "총액 누락"
+ISSUE_PAYMENT_MISSING = "결제수단 누락"
+ISSUE_VAT_REVIEW = "부가세 확인"
+ISSUE_DISCOUNT_ZERO_PAYMENT = "할인/0원 결제"
+ISSUE_SENSITIVE_TEXT = "민감문구 감지"
+ISSUE_CARD_UNMATCHED = "카드 미매칭"
+
+REVIEW_FILTER_OPTIONS = [
+    REVIEW_FILTER_ALL,
+    REVIEW_FILTER_NEEDS_REVIEW,
+    REVIEW_FILTER_APPROVED,
+    REVIEW_FILTER_EXCLUDED,
+]
+
+REVIEW_ISSUE_OPTIONS = [
+    ISSUE_MERCHANT_MISSING,
+    ISSUE_DATE_MISSING,
+    ISSUE_BUSINESS_NUMBER_MISSING,
+    ISSUE_TOTAL_MISSING,
+    ISSUE_PAYMENT_MISSING,
+    ISSUE_VAT_REVIEW,
+    ISSUE_DISCOUNT_ZERO_PAYMENT,
+    ISSUE_SENSITIVE_TEXT,
+    ISSUE_CARD_UNMATCHED,
+]
 
 INTERNAL_RECEIPT_ID = "__receipt_id"
 INTERNAL_SOURCE_FILE_ID = "__source_file_id"
 INTERNAL_OCR_RESULT_ID = "__ocr_result_id"
 
 REVIEW_DISPLAY_COLUMNS = [
+    COL_REVIEW_PRIORITY,
+    COL_MISSING_FIELDS,
+    COL_QUALITY_FLAGS,
     COL_INCLUDED,
     COL_DATE,
     COL_MERCHANT,
@@ -99,6 +139,9 @@ REVIEW_EDITABLE_COLUMNS = [
 ]
 
 REVIEW_READ_ONLY_COLUMNS = [
+    COL_REVIEW_PRIORITY,
+    COL_MISSING_FIELDS,
+    COL_QUALITY_FLAGS,
     COL_RECOMMENDED_CATEGORY,
     COL_GROSS_AMOUNT,
     COL_DISCOUNT_AMOUNT,
@@ -123,6 +166,79 @@ REVIEW_READ_ONLY_COLUMNS = [
 def receipt_records_to_review_dataframe(records: list[ReceiptRecord]) -> pd.DataFrame:
     rows = [_record_to_review_row(record) for record in records]
     return pd.DataFrame(rows, columns=[*REVIEW_DISPLAY_COLUMNS, *tracking_columns()])
+
+
+def filter_receipt_records_for_review(
+    records: list[ReceiptRecord],
+    *,
+    status_filter: str = REVIEW_FILTER_ALL,
+    issue_filters: list[str] | tuple[str, ...] | None = None,
+) -> list[ReceiptRecord]:
+    selected_issues = set(issue_filters or [])
+    return [
+        record
+        for record in records
+        if _matches_review_status_filter(record, status_filter)
+        and _matches_issue_filters(record, selected_issues)
+    ]
+
+
+def merge_reviewed_records(
+    original_records: list[ReceiptRecord],
+    reviewed_subset: list[ReceiptRecord],
+) -> list[ReceiptRecord]:
+    reviewed_by_id = {record.id: record for record in reviewed_subset}
+    return [reviewed_by_id.get(record.id, record) for record in original_records]
+
+
+def build_review_issue_summary(records: list[ReceiptRecord]) -> dict[str, int]:
+    summary = {issue: 0 for issue in REVIEW_ISSUE_OPTIONS}
+    for record in records:
+        for issue in review_issue_labels(record):
+            if issue in summary:
+                summary[issue] += 1
+    return summary
+
+
+def review_issue_labels(record: ReceiptRecord) -> list[str]:
+    issues: list[str] = []
+    if not record.merchant_name:
+        issues.append(ISSUE_MERCHANT_MISSING)
+    if record.transaction_date is None:
+        issues.append(ISSUE_DATE_MISSING)
+    if not record.business_number:
+        issues.append(ISSUE_BUSINESS_NUMBER_MISSING)
+    if record.total_amount is None:
+        issues.append(ISSUE_TOTAL_MISSING)
+    if not record.payment_method:
+        issues.append(ISSUE_PAYMENT_MISSING)
+    if record.vat_review_required or record.vat_warnings:
+        issues.append(ISSUE_VAT_REVIEW)
+    if "zero_payment_after_discount" in record.amount_warnings:
+        issues.append(ISSUE_DISCOUNT_ZERO_PAYMENT)
+    if record.sensitive_text_detected or record.sensitive_text_categories:
+        issues.append(ISSUE_SENSITIVE_TEXT)
+    if record.card_match_status not in {CardMatchStatus.MATCHED.value, CardMatchStatus.CANDIDATE.value}:
+        issues.append(ISSUE_CARD_UNMATCHED)
+    return _unique(issues)
+
+
+def review_priority_label(record: ReceiptRecord) -> str:
+    issues = set(review_issue_labels(record))
+    high_priority_issues = {
+        ISSUE_TOTAL_MISSING,
+        ISSUE_DATE_MISSING,
+        ISSUE_MERCHANT_MISSING,
+        ISSUE_DISCOUNT_ZERO_PAYMENT,
+        ISSUE_SENSITIVE_TEXT,
+    }
+    if issues & high_priority_issues:
+        return "높음"
+    if issues:
+        return "보통"
+    if record.review_status != ReviewStatus.APPROVED.value:
+        return "낮음"
+    return "완료"
 
 
 def review_dataframe_to_receipt_records(
@@ -230,6 +346,9 @@ def tracking_columns() -> list[str]:
 
 def _record_to_review_row(record: ReceiptRecord) -> dict[str, Any]:
     return {
+        COL_REVIEW_PRIORITY: review_priority_label(record),
+        COL_MISSING_FIELDS: _joined_missing_fields(record),
+        COL_QUALITY_FLAGS: "; ".join(review_issue_labels(record)) or "-",
         COL_INCLUDED: not is_excluded_record(record),
         COL_DATE: record.transaction_date,
         COL_MERCHANT: record.merchant_name,
@@ -281,6 +400,38 @@ def _joined_vat_reasons(record: ReceiptRecord) -> str:
     if record.vat_note:
         values.append(record.vat_note)
     return "; ".join(_unique(values))
+
+
+def _joined_missing_fields(record: ReceiptRecord) -> str:
+    missing_fields = []
+    if record.transaction_date is None:
+        missing_fields.append("날짜")
+    if not record.merchant_name:
+        missing_fields.append("상호")
+    if not record.business_number:
+        missing_fields.append("사업자번호")
+    if record.total_amount is None:
+        missing_fields.append("총액")
+    if not record.payment_method:
+        missing_fields.append("결제수단")
+    return "; ".join(missing_fields) or "-"
+
+
+def _matches_review_status_filter(record: ReceiptRecord, status_filter: str) -> bool:
+    if status_filter == REVIEW_FILTER_NEEDS_REVIEW:
+        return not is_excluded_record(record) and record.review_status != ReviewStatus.APPROVED.value
+    if status_filter == REVIEW_FILTER_APPROVED:
+        return not is_excluded_record(record) and record.review_status == ReviewStatus.APPROVED.value
+    if status_filter == REVIEW_FILTER_EXCLUDED:
+        return is_excluded_record(record)
+    return True
+
+
+def _matches_issue_filters(record: ReceiptRecord, issue_filters: set[str]) -> bool:
+    if not issue_filters:
+        return True
+    record_issues = set(review_issue_labels(record))
+    return bool(record_issues & issue_filters)
 
 
 def _has_duplicate_signal(record: ReceiptRecord) -> bool:

@@ -262,3 +262,25 @@ Rollback or correction is required if the change introduces any of the following
 - Any ExcelExporter column/sheet change, Processing History DB schema change, or production provider default change.
 
 Safe diagnostic detail codes are allowed for provider failures when they are sanitized categories only, for example `quota_or_rate_limit` for Azure HTTP 403 quota/rate-limit responses. Roll back or correct the change if raw Azure error messages, endpoint URLs, operation URLs, request headers, keys, raw tracebacks, or provider payloads are exposed as diagnostic details.
+
+## Review UX Quality Triage Change Control
+
+Review UX triage may add safe, derived review indicators and filters from
+`ReceiptRecord` only. It may not call OCR providers, reprocess files, or change
+the persisted history/export contracts.
+
+Allowed changes:
+
+- Derived review priority, missing-field, and quality-check labels.
+- Status and issue filters for the existing review table.
+- Safe selected-receipt detail panels that show parsed fields and source file
+  names only.
+
+Rollback or correction is required if any of the following occur:
+
+- The review UI displays provider raw output, full OCR text, raw JSON, full local
+  paths, endpoint URLs, operation URLs, secrets, tokens, or raw tracebacks.
+- Filtering causes hidden review rows to be dropped or overwritten.
+- The change modifies ExcelExporter sheets/columns, Processing History schema,
+  default OCR provider selection, automatic fallback behavior, or formal quality
+  scoring.
