@@ -224,6 +224,21 @@ Azure failures may include a sanitized `diagnostic_detail_code`, for example `qu
 PaddleOCR now generates only conservative candidate hints from safe OCR lines: obvious dates, business numbers, payment methods, and labeled amounts. It does not guess merchant names or infer totals from unlabeled maximum amounts.
 
 Week 10-D remains the future step for statistics aggregation, average processing time, failure rate, field match-rate summaries, formal field match scoring, and Azure fallback policy rules. These are not automated by the Week 10-C report.
+## Week 10-D-prep: Synthetic PaddleOCR Quality Fixtures
+
+Azure OCR quota/rate-limit issues can block live Azure comparisons, so PaddleOCR
+parser quality can also be improved with safe synthetic fixtures. The fixtures in
+`tests/fixtures/paddle_synthetic/` are not customer receipts, provider raw output,
+or full OCR text dumps. They are sanitized line-level inputs that are converted to
+`StandardOCRResult`, then parsed through `StandardOCRParserContext` and
+`ReceiptParser.parse_standard_context()`.
+
+This path is for conservative regression work only: explicitly labeled merchant
+names, labeled dates, business numbers, payment methods, labeled amounts,
+explicit VAT/supply values, redacted sensitive lines, and numeric noise guards.
+It does not call Azure, does not run
+real PaddleOCR in default pytest, and does not change the default provider,
+Excel export sheets/columns, or processing history schema.
 
 ### Review UX quality triage
 
@@ -236,3 +251,18 @@ This convenience layer is for manual review only. It does not display provider
 raw output, full OCR text, raw JSON, full local paths, secrets, or endpoint URLs,
 and it does not change OCR provider selection, Excel export sheets/columns, or
 Processing History schema.
+
+### New Job PaddleOCR Runtime Selection
+
+The New Job screen now includes `PaddleOCR Local` in the per-run OCR provider
+selector. This does not change the configured default provider; it only applies
+to the current upload batch when the user explicitly selects it.
+
+When selected, PaddleOCR results follow the safe standard path:
+
+`PaddleOCRProvider -> StandardOCRResult -> StandardOCRParserContext -> ReceiptParser.parse_standard_context() -> ReceiptRecord`
+
+The flow keeps PDF handling unsupported/deferred for PaddleOCR, does not expose
+provider raw output, full OCR text, raw JSON, full local paths, secrets, or
+endpoint URLs, and does not change Excel export sheets/columns or Processing
+History schema.

@@ -504,3 +504,99 @@ Early 10-sample testing showed that aggressive candidate guesses can increase ap
 
 Impact:
 PaddleOCR comparisons remain more honest: missing or weak fields stay visible as review/fallback signals. Future improvements should be driven by expected fixtures and Week 10-D statistics rather than broad heuristics.
+
+2026-05-17 update:
+Explicit merchant labels such as `상호`, `상호명`, `매장명`, `가맹점명`, and
+`점포명` are now allowed as safe merchant candidates in synthetic fixture-driven
+tests. This does not permit arbitrary first-line merchant guessing.
+
+---
+
+## ADR-039: PaddleOCR quality improvement uses synthetic safe fixtures
+
+Status: Accepted
+
+Decision:
+When live Azure comparison is blocked by quota or rate limits, PaddleOCR parser
+quality work may proceed with synthetic sanitized PaddleOCR line fixtures and
+expected `ReceiptRecord` field baselines.
+
+Reason:
+Synthetic safe fixtures let us test date, business number, payment method,
+labeled amount, explicit VAT/supply, redaction, low-confidence, and numeric-noise
+handling without customer receipts, provider raw output, live Azure calls, or
+real PaddleOCR execution in default pytest.
+
+Impact:
+The quality path remains `paddle_lines -> StandardOCRResult ->
+StandardOCRParserContext -> ReceiptParser.parse_standard_context() ->
+ReceiptRecord`. Fixture tests can drive conservative parser improvements while
+preserving the 10-A/B/C comparison contracts.
+
+Risk:
+Synthetic fixtures do not validate real image quality, skew, blur, glare,
+wrinkles, detection misses, or model-runtime failures.
+
+Response:
+Use these fixtures as regression baselines now, then add optional non-sensitive
+real OCR comparison once Azure quota and sample collection are stable.
+
+2026-06-08 update:
+A card-sales slip sample pattern was added as a saved Azure-anchor regression.
+The fixture checks Paddle parser output for the Azure-visible core fields without
+calling Azure again, and also validates explicit supply/VAT values when Paddle
+lines expose them safely.
+
+---
+
+## ADR-040: New Job may select PaddleOCR for the current run
+
+Status: Accepted
+
+Decision:
+The New Job screen may expose `PaddleOCR Local` as an explicit per-run OCR
+provider option. This does not change the configured default provider.
+
+Reason:
+PaddleOCR quality work needs to be usable in the normal upload/review flow
+without making local OCR a required dependency or replacing Azure/mock defaults.
+
+Impact:
+When selected, PaddleOCR output follows `StandardOCRResult ->
+StandardOCRParserContext -> ReceiptParser.parse_standard_context() ->
+ReceiptRecord`. The existing mock/Azure `OCRResult` parsing path remains
+compatible, PaddleOCR PDF handling remains unsupported/deferred, and Excel export
+plus Processing History contracts remain unchanged.
+
+Guardrails:
+The runtime path must not expose provider raw output, full OCR text, raw JSON,
+full local paths, secrets, endpoint URLs, operation URLs, raw tracebacks, or
+actual customer files. Default pytest must not require `paddleocr`, download OCR
+models, or run real PaddleOCR OCR.
+
+---
+
+## ADR-041: Speed improvements must preserve OCR quality behavior
+
+Status: Accepted
+
+Decision:
+PaddleOCR speed work may reuse expensive objects and cache pure repeated
+calculations, but it must not skip OCR, parser, candidate, validation, fallback,
+or review-required logic that can affect extraction quality.
+
+Reason:
+The New Job flow needs faster local OCR batches, but speed gains are not useful
+if they hide missing fields or lower receipt extraction quality.
+
+Impact:
+`PaddleOCRProvider` can reuse the OCR engine instance within a provider object,
+standard parser context construction can avoid duplicate candidate-map
+extraction, and pure line compaction can use a bounded cache. These changes
+preserve the same OCR result, parser input, and `ReceiptRecord` behavior.
+
+Guardrails:
+Rollback or correction is required if speed work changes parsed fields,
+candidate hints, review status/reasons, validation warnings, default provider
+selection, ExcelExporter output, Processing History schema, or raw-data exposure
+rules.

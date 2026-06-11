@@ -12,6 +12,7 @@ from app.parser.normalizers import (
 from app.parser.receipt_parser import (
     ReceiptParser,
     build_receipt_amount_diagnostics,
+    classify_discount_label,
     diagnose_discount_lines,
     is_valid_merchant_candidate,
 )
@@ -102,6 +103,7 @@ def test_ocr_result_metadata_is_reflected_in_receipt_record():
 def test_receipt_normalizers_handle_supported_formats():
     assert normalize_date("2026.05.07").isoformat() == "2026-05-07"
     assert normalize_date("20260507").isoformat() == "2026-05-07"
+    assert normalize_date("2278-12-05") is None
     assert normalize_amount("12,000원") == 12000
     assert normalize_amount("₩12,000") == 12000
     assert normalize_amount("－10,800") == -10800
@@ -603,6 +605,34 @@ def test_discount_diagnostics_do_not_include_original_line_or_amount_value():
     assert first["amount_shape"] == "ocr_corrected_amount"
     assert "line" not in first
     assert "10,8O0" not in str(first)
+
+
+def test_approval_amount_is_not_fuzzy_matched_as_discount_label():
+    label_info = classify_discount_label("승인금액")
+
+    assert label_info["line_type"] == "unknown"
+    assert label_info["label_match_method"] == "none"
+
+
+def test_payment_summary_amount_is_not_used_as_discount_from_next_line():
+    raw_text = "\n".join(
+        [
+            "상호명 한화호텔앤드리조트(주) 설악",
+            "사업자번호 101-81-30747",
+            "거래일자 2026-05-24",
+            "판매금액",
+            "20,000",
+            "합계금액",
+            "20,000",
+            "승인금액",
+            "20,000",
+        ]
+    )
+
+    receipt = ReceiptParser().parse(make_ocr_result(raw_text))
+
+    assert receipt.discount_amount is None
+    assert "discount_detected" not in receipt.amount_warnings
 
 
 def test_realistic_discount_receipt_keeps_parser_amount_fields_at_zero_payment():
@@ -1369,3 +1399,5 @@ def test_app_overlay_titles_are_not_valid_merchant_candidates():
     assert is_valid_merchant_candidate("갤러리") is False
     assert is_valid_merchant_candidate("Samsung") is False
     assert is_valid_merchant_candidate("iPhone") is False
+    assert is_valid_merchant_candidate("CEasy<heck") is False
+    assert is_valid_merchant_candidate("EasyCheck") is False

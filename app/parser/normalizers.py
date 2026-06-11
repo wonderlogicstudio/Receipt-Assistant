@@ -25,19 +25,28 @@ def normalize_date(value: object) -> date | None:
 
     text = text.split()[0]
     if re.fullmatch(r"\d{8}", text):
-        return datetime.strptime(text, "%Y%m%d").date()
+        try:
+            return _valid_date_or_none(datetime.strptime(text, "%Y%m%d").date())
+        except ValueError:
+            return None
 
     text = text.replace(".", "-").replace("/", "-")
     for fmt in ("%Y-%m-%d", "%y-%m-%d"):
         try:
-            return datetime.strptime(text, fmt).date()
+            return _valid_date_or_none(datetime.strptime(text, fmt).date())
         except ValueError:
             continue
 
     parsed = pd.to_datetime(value, errors="coerce")
     if pd.isna(parsed):
         return None
-    return parsed.date()
+    return _valid_date_or_none(parsed.date())
+
+
+def _valid_date_or_none(value: date) -> date | None:
+    if 2000 <= value.year <= 2099:
+        return value
+    return None
 
 
 def normalize_amount(value: object) -> int | None:
@@ -164,6 +173,9 @@ def is_overlay_text(value: object) -> bool:
         "batterylow",
         "배터리",
         "네트워크",
+        "easycheck",
+        "ceasyheck",
+        "easyheck",
         "슈퍼마리오",
     }
     overlay_compact_keywords = {_compact_token(keyword) for keyword in overlay_keywords if keyword}
@@ -225,6 +237,14 @@ def is_receipt_metadata_line(value: object) -> bool:
         "총금액",
         "결제금액",
         "결제수단",
+    )
+    metadata_keywords = (
+        *metadata_keywords,
+        "\uce74\ub4dc",
+        "\uc2e0\uc6a9\uce74\ub4dc",
+        "\uccb4\ud06c\uce74\ub4dc",
+        "\ube44\uc528\uce74\ub4dc",
+        "\uace0\uc720\ubc88\ud638",
     )
     if any(keyword.lower() in text.lower() for keyword in metadata_keywords):
         return True

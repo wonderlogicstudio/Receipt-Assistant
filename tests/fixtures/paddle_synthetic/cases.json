@@ -1,0 +1,695 @@
+[
+  {
+    "sample_id": "synthetic_mart_basic_001",
+    "description": "마트 기본 영수증, 부가세 미명시, 카드 결제",
+    "source_file_name": "synthetic_mart_basic_001.jpg",
+    "paddle_lines": [
+      {"text": "매장명 이마트 영등포점", "confidence": 0.96},
+      {"text": "사업자등록번호 206-86-50913", "confidence": 0.95},
+      {"text": "거래일자 2026-02-16 13:24", "confidence": 0.94},
+      {"text": "합계 35,700", "confidence": 0.93},
+      {"text": "카드결제 35,700", "confidence": 0.91}
+    ],
+    "expected": {
+      "merchant_name": "이마트 영등포점",
+      "transaction_date": "2026-02-16",
+      "business_number": "206-86-50913",
+      "total_amount": 35700,
+      "final_amount": 35700,
+      "paid_amount": 35700,
+      "payment_method": "카드",
+      "vat_amount": null,
+      "vat_review_required": true,
+      "review_required_expected": true
+    },
+    "risk_tags": ["mart", "vat_missing", "card_payment"]
+  },
+  {
+    "sample_id": "synthetic_cafe_basic_001",
+    "description": "카페 기본 영수증, 현금 결제",
+    "source_file_name": "synthetic_cafe_basic_001.jpg",
+    "paddle_lines": [
+      {"text": "상호명 한강카페", "confidence": 0.97},
+      {"text": "일자 2026.03.01", "confidence": 0.93},
+      {"text": "총금액 8,500", "confidence": 0.94},
+      {"text": "현금결제 8,500", "confidence": 0.92}
+    ],
+    "expected": {
+      "merchant_name": "한강카페",
+      "transaction_date": "2026-03-01",
+      "total_amount": 8500,
+      "final_amount": 8500,
+      "paid_amount": 8500,
+      "payment_method": "현금",
+      "vat_amount": null,
+      "review_required_expected": true
+    },
+    "risk_tags": ["cafe", "cash_payment"]
+  },
+  {
+    "sample_id": "synthetic_restaurant_basic_001",
+    "description": "식당 영수증, 공급가액/부가세/합계 명시",
+    "source_file_name": "synthetic_restaurant_basic_001.jpg",
+    "paddle_lines": [
+      {"text": "가맹점명 남산식당", "confidence": 0.96},
+      {"text": "거래일자 2026/03/05", "confidence": 0.95},
+      {"text": "공급가액 30,000", "confidence": 0.94},
+      {"text": "부가세 3,000", "confidence": 0.94},
+      {"text": "합계 33,000", "confidence": 0.95},
+      {"text": "카드결제 33,000", "confidence": 0.93}
+    ],
+    "expected": {
+      "merchant_name": "남산식당",
+      "transaction_date": "2026-03-05",
+      "total_amount": 33000,
+      "final_amount": 33000,
+      "paid_amount": 33000,
+      "supply_amount": 30000,
+      "vat_amount": 3000,
+      "vat_review_required": false,
+      "payment_method": "카드",
+      "review_required_expected": true
+    },
+    "risk_tags": ["restaurant", "vat_explicit"]
+  },
+  {
+    "sample_id": "synthetic_gas_station_001",
+    "description": "주유소 영수증, 단가/리터 숫자 포함",
+    "source_file_name": "synthetic_gas_station_001.jpg",
+    "paddle_lines": [
+      {"text": "상호명 서울주유소", "confidence": 0.95},
+      {"text": "거래일자 2026-03-10", "confidence": 0.93},
+      {"text": "휘발유 단가 1,650", "confidence": 0.89},
+      {"text": "수량 39.394 L", "confidence": 0.88},
+      {"text": "총금액 65,000", "confidence": 0.94},
+      {"text": "신용카드 65,000", "confidence": 0.92}
+    ],
+    "expected": {
+      "merchant_name": "서울주유소",
+      "transaction_date": "2026-03-10",
+      "total_amount": 65000,
+      "final_amount": 65000,
+      "paid_amount": 65000,
+      "payment_method": "카드",
+      "vat_amount": null,
+      "review_required_expected": true
+    },
+    "risk_tags": ["gas_station", "quantity_noise"]
+  },
+  {
+    "sample_id": "synthetic_pharmacy_001",
+    "description": "약국 영수증, 품목성 숫자와 총액 라벨",
+    "source_file_name": "synthetic_pharmacy_001.jpg",
+    "paddle_lines": [
+      {"text": "점포명 새봄약국", "confidence": 0.97},
+      {"text": "매출일자 2026-03-12", "confidence": 0.94},
+      {"text": "품목 3", "confidence": 0.9},
+      {"text": "보험 5,000", "confidence": 0.87},
+      {"text": "총액 18,200", "confidence": 0.95},
+      {"text": "카드결제 18,200", "confidence": 0.93}
+    ],
+    "expected": {
+      "merchant_name": "새봄약국",
+      "transaction_date": "2026-03-12",
+      "total_amount": 18200,
+      "final_amount": 18200,
+      "paid_amount": 18200,
+      "payment_method": "카드",
+      "review_required_expected": true
+    },
+    "risk_tags": ["pharmacy", "item_noise"]
+  },
+  {
+    "sample_id": "synthetic_bookstore_001",
+    "description": "문구점/서점 영수증, 상품금액과 결제금액 동일",
+    "source_file_name": "synthetic_bookstore_001.jpg",
+    "paddle_lines": [
+      {"text": "상호명 별빛서점", "confidence": 0.95},
+      {"text": "거래일자 2026-03-14", "confidence": 0.94},
+      {"text": "상품금액 22,000", "confidence": 0.93},
+      {"text": "합계 22,000", "confidence": 0.93},
+      {"text": "체크카드 22,000", "confidence": 0.92}
+    ],
+    "expected": {
+      "merchant_name": "별빛서점",
+      "transaction_date": "2026-03-14",
+      "gross_amount": 22000,
+      "total_amount": 22000,
+      "final_amount": 22000,
+      "paid_amount": 22000,
+      "payment_method": "카드",
+      "review_required_expected": true
+    },
+    "risk_tags": ["bookstore", "gross_equals_paid"]
+  },
+  {
+    "sample_id": "synthetic_vat_explicit_001",
+    "description": "부가세 명시 케이스",
+    "source_file_name": "synthetic_vat_explicit_001.jpg",
+    "paddle_lines": [
+      {"text": "상호명 세금카페", "confidence": 0.96},
+      {"text": "거래일자 2026-03-16", "confidence": 0.95},
+      {"text": "공급가 10,000", "confidence": 0.94},
+      {"text": "세액 1,000", "confidence": 0.94},
+      {"text": "총금액 11,000", "confidence": 0.95}
+    ],
+    "expected": {
+      "merchant_name": "세금카페",
+      "transaction_date": "2026-03-16",
+      "supply_amount": 10000,
+      "vat_amount": 1000,
+      "total_amount": 11000,
+      "vat_review_required": false,
+      "review_required_expected": true
+    },
+    "risk_tags": ["vat_explicit"]
+  },
+  {
+    "sample_id": "synthetic_vat_missing_001",
+    "description": "합계만 있고 부가세 미명시",
+    "source_file_name": "synthetic_vat_missing_001.jpg",
+    "paddle_lines": [
+      {"text": "매장명 무지개마트", "confidence": 0.96},
+      {"text": "거래일자 2026-03-18", "confidence": 0.94},
+      {"text": "합계 44,000", "confidence": 0.95}
+    ],
+    "expected": {
+      "merchant_name": "무지개마트",
+      "transaction_date": "2026-03-18",
+      "total_amount": 44000,
+      "vat_amount": null,
+      "estimated_supply_amount": 40000,
+      "estimated_vat_amount": 4000,
+      "vat_review_required": true,
+      "review_required_expected": true
+    },
+    "risk_tags": ["vat_missing"]
+  },
+  {
+    "sample_id": "synthetic_supply_vat_total_001",
+    "description": "공급가액, 부가세, 합계가 모두 존재",
+    "source_file_name": "synthetic_supply_vat_total_001.jpg",
+    "paddle_lines": [
+      {"text": "상호명 정직상회", "confidence": 0.96},
+      {"text": "거래일자 2026-03-20", "confidence": 0.94},
+      {"text": "공급가액 50,000", "confidence": 0.93},
+      {"text": "VAT 5,000", "confidence": 0.92},
+      {"text": "합계 55,000", "confidence": 0.95}
+    ],
+    "expected": {
+      "merchant_name": "정직상회",
+      "transaction_date": "2026-03-20",
+      "supply_amount": 50000,
+      "vat_amount": 5000,
+      "total_amount": 55000,
+      "review_required_expected": true
+    },
+    "risk_tags": ["vat_explicit", "supply_total"]
+  },
+  {
+    "sample_id": "synthetic_discount_coupon_001",
+    "description": "상품금액, 쿠폰할인, 최종 결제금액 분리",
+    "source_file_name": "synthetic_discount_coupon_001.jpg",
+    "paddle_lines": [
+      {"text": "상호명 쿠폰분식", "confidence": 0.95},
+      {"text": "거래일자 2026-03-22", "confidence": 0.94},
+      {"text": "상품금액 15,000", "confidence": 0.93},
+      {"text": "쿠폰할인 5,000", "confidence": 0.92},
+      {"text": "합계 10,000", "confidence": 0.93},
+      {"text": "카드결제 10,000", "confidence": 0.92}
+    ],
+    "expected": {
+      "merchant_name": "쿠폰분식",
+      "gross_amount": 15000,
+      "discount_amount": 5000,
+      "final_amount": 10000,
+      "paid_amount": 10000,
+      "total_amount": 10000,
+      "review_required_expected": true
+    },
+    "risk_tags": ["discount", "coupon"]
+  },
+  {
+    "sample_id": "synthetic_point_zero_payment_001",
+    "description": "포인트 사용으로 카드결제 0원",
+    "source_file_name": "synthetic_point_zero_payment_001.jpg",
+    "paddle_lines": [
+      {"text": "상호명 포인트상점", "confidence": 0.96},
+      {"text": "거래일자 2026-03-24", "confidence": 0.94},
+      {"text": "상품금액 10,000", "confidence": 0.93},
+      {"text": "포인트 사용 10,000", "confidence": 0.9},
+      {"text": "합계 0", "confidence": 0.93},
+      {"text": "카드결제 0", "confidence": 0.92}
+    ],
+    "expected": {
+      "merchant_name": "포인트상점",
+      "gross_amount": 10000,
+      "final_amount": 0,
+      "paid_amount": 0,
+      "total_amount": 0,
+      "vat_amount": null,
+      "review_required_expected": true
+    },
+    "risk_tags": ["point", "zero_payment"]
+  },
+  {
+    "sample_id": "synthetic_product_total_diff_001",
+    "description": "상품금액과 최종 결제금액이 다름",
+    "source_file_name": "synthetic_product_total_diff_001.jpg",
+    "paddle_lines": [
+      {"text": "상호명 차액문구", "confidence": 0.95},
+      {"text": "거래일자 2026-03-26", "confidence": 0.94},
+      {"text": "상품금액 25,000", "confidence": 0.93},
+      {"text": "합계 23,000", "confidence": 0.93},
+      {"text": "카드결제 23,000", "confidence": 0.92}
+    ],
+    "expected": {
+      "merchant_name": "차액문구",
+      "gross_amount": 25000,
+      "final_amount": 23000,
+      "paid_amount": 23000,
+      "total_amount": 23000,
+      "review_required_expected": true
+    },
+    "risk_tags": ["gross_final_diff"]
+  },
+  {
+    "sample_id": "synthetic_card_payment_001",
+    "description": "카드/신용카드/체크카드 라벨 확인",
+    "source_file_name": "synthetic_card_payment_001.jpg",
+    "paddle_lines": [
+      {"text": "매장명 카드테스트점", "confidence": 0.96},
+      {"text": "거래일자 2026-03-28", "confidence": 0.94},
+      {"text": "합계 7,700", "confidence": 0.93},
+      {"text": "신용카드 7,700", "confidence": 0.91}
+    ],
+    "expected": {
+      "merchant_name": "카드테스트점",
+      "payment_method": "카드",
+      "total_amount": 7700,
+      "paid_amount": 7700,
+      "review_required_expected": true
+    },
+    "risk_tags": ["card_payment"]
+  },
+  {
+    "sample_id": "synthetic_cash_payment_001",
+    "description": "현금/현금영수증 라벨 확인",
+    "source_file_name": "synthetic_cash_payment_001.jpg",
+    "paddle_lines": [
+      {"text": "매장명 현금테스트점", "confidence": 0.96},
+      {"text": "거래일자 2026-03-30", "confidence": 0.94},
+      {"text": "합계 9,900", "confidence": 0.93},
+      {"text": "현금영수증", "confidence": 0.91},
+      {"text": "현금결제 9,900", "confidence": 0.9}
+    ],
+    "expected": {
+      "merchant_name": "현금테스트점",
+      "payment_method": "현금",
+      "total_amount": 9900,
+      "paid_amount": 9900,
+      "review_required_expected": true
+    },
+    "risk_tags": ["cash_payment"]
+  },
+  {
+    "sample_id": "synthetic_payment_missing_001",
+    "description": "결제수단 누락",
+    "source_file_name": "synthetic_payment_missing_001.jpg",
+    "paddle_lines": [
+      {"text": "상호명 결제누락점", "confidence": 0.95},
+      {"text": "거래일자 2026-04-01", "confidence": 0.94},
+      {"text": "총액 12,300", "confidence": 0.93}
+    ],
+    "expected": {
+      "merchant_name": "결제누락점",
+      "payment_method": null,
+      "total_amount": 12300,
+      "review_required_expected": true
+    },
+    "risk_tags": ["payment_missing"]
+  },
+  {
+    "sample_id": "synthetic_business_number_valid_001",
+    "description": "정상 사업자번호",
+    "source_file_name": "synthetic_business_number_valid_001.jpg",
+    "paddle_lines": [
+      {"text": "상호명 사업자정상점", "confidence": 0.95},
+      {"text": "사업자번호 152-21-01299", "confidence": 0.94},
+      {"text": "거래일자 2026-04-03", "confidence": 0.94},
+      {"text": "합계 19,000", "confidence": 0.93}
+    ],
+    "expected": {
+      "merchant_name": "사업자정상점",
+      "business_number": "152-21-01299",
+      "total_amount": 19000,
+      "review_required_expected": true
+    },
+    "risk_tags": ["business_number_valid"]
+  },
+  {
+    "sample_id": "synthetic_business_number_broken_001",
+    "description": "깨진 사업자번호는 억지 정상화하지 않음",
+    "source_file_name": "synthetic_business_number_broken_001.jpg",
+    "paddle_lines": [
+      {"text": "상호명 사업자깨짐점", "confidence": 0.95},
+      {"text": "사업자등록번호 123-4X-67890", "confidence": 0.9},
+      {"text": "거래일자 2026-04-05", "confidence": 0.94},
+      {"text": "합계 21,000", "confidence": 0.93}
+    ],
+    "expected": {
+      "merchant_name": "사업자깨짐점",
+      "business_number": null,
+      "total_amount": 21000,
+      "review_required_expected": true
+    },
+    "risk_tags": ["business_number_broken"]
+  },
+  {
+    "sample_id": "synthetic_date_dash_001",
+    "description": "YYYY-MM-DD 날짜",
+    "source_file_name": "synthetic_date_dash_001.jpg",
+    "paddle_lines": [
+      {"text": "상호명 날짜대시점", "confidence": 0.95},
+      {"text": "거래일자 2026-04-07", "confidence": 0.94},
+      {"text": "합계 11,100", "confidence": 0.93}
+    ],
+    "expected": {"merchant_name": "날짜대시점", "transaction_date": "2026-04-07", "total_amount": 11100, "review_required_expected": true},
+    "risk_tags": ["date_dash"]
+  },
+  {
+    "sample_id": "synthetic_date_dot_001",
+    "description": "YYYY.MM.DD 날짜",
+    "source_file_name": "synthetic_date_dot_001.jpg",
+    "paddle_lines": [
+      {"text": "상호명 날짜점점", "confidence": 0.95},
+      {"text": "일자 2026.04.09", "confidence": 0.94},
+      {"text": "합계 12,200", "confidence": 0.93}
+    ],
+    "expected": {"merchant_name": "날짜점점", "transaction_date": "2026-04-09", "total_amount": 12200, "review_required_expected": true},
+    "risk_tags": ["date_dot"]
+  },
+  {
+    "sample_id": "synthetic_date_slash_001",
+    "description": "YYYY/MM/DD 날짜",
+    "source_file_name": "synthetic_date_slash_001.jpg",
+    "paddle_lines": [
+      {"text": "상호명 날짜슬래시점", "confidence": 0.95},
+      {"text": "승인일자 2026/04/11", "confidence": 0.94},
+      {"text": "합계 13,300", "confidence": 0.93}
+    ],
+    "expected": {"merchant_name": "날짜슬래시점", "transaction_date": "2026-04-11", "total_amount": 13300, "review_required_expected": true},
+    "risk_tags": ["date_slash"]
+  },
+  {
+    "sample_id": "synthetic_date_compact_001",
+    "description": "YYYYMMDD 날짜",
+    "source_file_name": "synthetic_date_compact_001.jpg",
+    "paddle_lines": [
+      {"text": "상호명 날짜컴팩트점", "confidence": 0.95},
+      {"text": "매출일자 20260413", "confidence": 0.94},
+      {"text": "합계 14,400", "confidence": 0.93}
+    ],
+    "expected": {"merchant_name": "날짜컴팩트점", "transaction_date": "2026-04-13", "total_amount": 14400, "review_required_expected": true},
+    "risk_tags": ["date_compact"]
+  },
+  {
+    "sample_id": "synthetic_amount_ocr_o_001",
+    "description": "35,O00 금액 OCR 오인식",
+    "source_file_name": "synthetic_amount_ocr_o_001.jpg",
+    "paddle_lines": [
+      {"text": "상호명 금액오점", "confidence": 0.95},
+      {"text": "거래일자 2026-04-15", "confidence": 0.94},
+      {"text": "합계 35,O00", "confidence": 0.9}
+    ],
+    "expected": {"merchant_name": "금액오점", "total_amount": 35000, "final_amount": 35000, "review_required_expected": true},
+    "risk_tags": ["amount_ocr_o"]
+  },
+  {
+    "sample_id": "synthetic_amount_ocr_oo_001",
+    "description": "12,OOO 금액 OCR 오인식",
+    "source_file_name": "synthetic_amount_ocr_oo_001.jpg",
+    "paddle_lines": [
+      {"text": "상호명 금액오오점", "confidence": 0.95},
+      {"text": "거래일자 2026-04-17", "confidence": 0.94},
+      {"text": "총금액 12,OOO", "confidence": 0.9}
+    ],
+    "expected": {"merchant_name": "금액오오점", "total_amount": 12000, "final_amount": 12000, "review_required_expected": true},
+    "risk_tags": ["amount_ocr_oo"]
+  },
+  {
+    "sample_id": "synthetic_amount_ocr_one_001",
+    "description": "1O,500 금액 OCR 오인식",
+    "source_file_name": "synthetic_amount_ocr_one_001.jpg",
+    "paddle_lines": [
+      {"text": "상호명 금액일오점", "confidence": 0.95},
+      {"text": "거래일자 2026-04-19", "confidence": 0.94},
+      {"text": "합계 1O,500", "confidence": 0.9}
+    ],
+    "expected": {"merchant_name": "금액일오점", "total_amount": 10500, "final_amount": 10500, "review_required_expected": true},
+    "risk_tags": ["amount_ocr_one"]
+  },
+  {
+    "sample_id": "synthetic_amount_space_001",
+    "description": "35 700 금액 공백",
+    "source_file_name": "synthetic_amount_space_001.jpg",
+    "paddle_lines": [
+      {"text": "상호명 공백금액점", "confidence": 0.95},
+      {"text": "거래일자 2026-04-21", "confidence": 0.94},
+      {"text": "합계 35 700", "confidence": 0.9}
+    ],
+    "expected": {"merchant_name": "공백금액점", "total_amount": 35700, "final_amount": 35700, "review_required_expected": true},
+    "risk_tags": ["amount_space"]
+  },
+  {
+    "sample_id": "synthetic_amount_large_space_001",
+    "description": "1 057 200 큰 금액 공백",
+    "source_file_name": "synthetic_amount_large_space_001.jpg",
+    "paddle_lines": [
+      {"text": "상호명 큰공백금액점", "confidence": 0.95},
+      {"text": "거래일자 2026-04-23", "confidence": 0.94},
+      {"text": "청구금액 1 057 200", "confidence": 0.9}
+    ],
+    "expected": {"merchant_name": "큰공백금액점", "total_amount": 1057200, "final_amount": 1057200, "review_required_expected": true},
+    "risk_tags": ["amount_large_space"]
+  },
+  {
+    "sample_id": "synthetic_sensitive_redacted_001",
+    "description": "민감정보 redacted 라인 포함",
+    "source_file_name": "synthetic_sensitive_redacted_001.jpg",
+    "paddle_lines": [
+      {"text": "상호명 안전상점", "confidence": 0.95},
+      {"text": "[REDACTED]", "confidence": 0.99, "sensitive_category": "card_number"},
+      {"text": "거래일자 2026-04-25", "confidence": 0.94},
+      {"text": "합계 27,000", "confidence": 0.93}
+    ],
+    "expected": {
+      "merchant_name": "안전상점",
+      "total_amount": 27000,
+      "sensitive_text_detected": true,
+      "sensitive_text_categories": ["card_number"],
+      "review_required_expected": true
+    },
+    "risk_tags": ["sensitive_redacted"]
+  },
+  {
+    "sample_id": "synthetic_low_confidence_001",
+    "description": "low confidence line 포함",
+    "source_file_name": "synthetic_low_confidence_001.jpg",
+    "paddle_lines": [
+      {"text": "상호명 저신뢰상점", "confidence": 0.96},
+      {"text": "거래일자 2026-04-27", "confidence": 0.94},
+      {"text": "합계 31,000", "confidence": 0.42}
+    ],
+    "expected": {
+      "merchant_name": "저신뢰상점",
+      "transaction_date": "2026-04-27",
+      "total_amount": 31000,
+      "review_required_expected": true
+    },
+    "risk_tags": ["low_confidence"]
+  },
+  {
+    "sample_id": "synthetic_approval_number_001",
+    "description": "승인번호가 total_amount로 들어가지 않아야 함",
+    "source_file_name": "synthetic_approval_number_001.jpg",
+    "paddle_lines": [
+      {"text": "상호명 승인테스트점", "confidence": 0.95},
+      {"text": "거래일자 2026-04-29", "confidence": 0.94},
+      {"text": "승인번호 12345678", "confidence": 0.92},
+      {"text": "합계 15,000", "confidence": 0.93}
+    ],
+    "expected": {"merchant_name": "승인테스트점", "total_amount": 15000, "final_amount": 15000, "review_required_expected": true},
+    "risk_tags": ["approval_number_noise"]
+  },
+  {
+    "sample_id": "synthetic_quantity_many_001",
+    "description": "수량 1, 3, 10이 금액으로 들어가지 않아야 함",
+    "source_file_name": "synthetic_quantity_many_001.jpg",
+    "paddle_lines": [
+      {"text": "상호명 수량테스트점", "confidence": 0.95},
+      {"text": "거래일자 2026-05-01", "confidence": 0.94},
+      {"text": "수량 1", "confidence": 0.93},
+      {"text": "수량 3", "confidence": 0.93},
+      {"text": "수량 10", "confidence": 0.93},
+      {"text": "합계 30,000", "confidence": 0.93}
+    ],
+    "expected": {"merchant_name": "수량테스트점", "total_amount": 30000, "final_amount": 30000, "review_required_expected": true},
+    "risk_tags": ["quantity_noise"]
+  },
+  {
+    "sample_id": "synthetic_footer_number_001",
+    "description": "주문번호, 대기번호, 푸터 숫자가 금액으로 들어가지 않아야 함",
+    "source_file_name": "synthetic_footer_number_001.jpg",
+    "paddle_lines": [
+      {"text": "상호명 푸터테스트점", "confidence": 0.95},
+      {"text": "거래일자 2026-05-03", "confidence": 0.94},
+      {"text": "주문번호 45", "confidence": 0.9},
+      {"text": "대기번호 12", "confidence": 0.9},
+      {"text": "[REDACTED]", "confidence": 0.9, "sensitive_category": "phone_number"},
+      {"text": "합계 11,000", "confidence": 0.93}
+    ],
+    "expected": {
+      "merchant_name": "푸터테스트점",
+      "total_amount": 11000,
+      "final_amount": 11000,
+      "sensitive_text_detected": true,
+      "sensitive_text_categories": ["phone_number"],
+      "review_required_expected": true
+    },
+    "risk_tags": ["footer_number_noise"]
+  },
+  {
+    "sample_id": "synthetic_card_sales_slip_hoam_001",
+    "description": "카드판매 영수증, 사업자번호 블록 주변 상호와 분리된 합계/공급가/부가세 라벨",
+    "source_file_name": "synthetic_card_sales_slip_hoam_001.jpg",
+    "paddle_lines": [
+      {"text": "[ 카드판매 영수증 ]", "confidence": 0.88},
+      {"text": "호암비엠 종각역점", "confidence": 0.86},
+      {"text": "사업자번호 : 897-81-03545", "confidence": 0.93},
+      {"text": "대표자: 정호원", "confidence": 0.86},
+      {"text": "서울특별시 종로구 우정국로 43 1층", "confidence": 0.85},
+      {"text": "판매시간: 20260510 11:58:02", "confidence": 0.91},
+      {"text": "판매사원: 엄수현", "confidence": 0.85},
+      {"text": "[카드종류] 현대VISA", "confidence": 0.88},
+      {"text": "[합계]", "confidence": 0.9},
+      {"text": "60,000", "confidence": 0.9},
+      {"text": "[공급가]", "confidence": 0.89},
+      {"text": "54,546", "confidence": 0.89},
+      {"text": "[부가세]", "confidence": 0.89},
+      {"text": "5,454", "confidence": 0.89},
+      {"text": "[승인번호]", "confidence": 0.88},
+      {"text": "00592623", "confidence": 0.88}
+    ],
+    "expected": {
+      "merchant_name": "호암비엠 종각역점",
+      "transaction_date": "2026-05-10",
+      "business_number": "897-81-03545",
+      "total_amount": 60000,
+      "final_amount": 60000,
+      "supply_amount": 54546,
+      "vat_amount": 5454,
+      "vat_review_required": false,
+      "payment_method": "카드",
+      "review_required_expected": true
+    },
+    "risk_tags": ["card_sales_slip", "business_block_merchant", "split_amount_labels", "vat_explicit"]
+  },
+  {
+    "sample_id": "synthetic_repeated_card_amount_001",
+    "description": "카드 단서와 반복된 독립 금액 라인으로 총액/최종/결제금액 후보 생성",
+    "source_file_name": "synthetic_repeated_card_amount_001.jpg",
+    "paddle_lines": [
+      {"text": "107 000", "confidence": 0.94},
+      {"text": "107 000", "confidence": 0.94},
+      {"text": "00:7", "confidence": 0.75},
+      {"text": "우리비씨카드", "confidence": 0.97},
+      {"text": "신용카드", "confidence": 0.97},
+      {"text": "승인구", "confidence": 0.56}
+    ],
+    "expected": {
+      "total_amount": 107000,
+      "final_amount": 107000,
+      "paid_amount": 107000,
+      "payment_method": "카드",
+      "review_required_expected": true
+    },
+    "risk_tags": ["card_sales_slip", "repeated_standalone_amount", "weak_paddle_text"]
+  },
+  {
+    "sample_id": "synthetic_top_repeated_amount_no_payment_001",
+    "description": "카드 단서 없이 상단 반복 독립 금액은 총액/최종금액만 후보화하고 결제금액은 확정하지 않음",
+    "source_file_name": "synthetic_top_repeated_amount_no_payment_001.jpg",
+    "paddle_lines": [
+      {"text": "담당: KIOSK-202", "confidence": 0.96},
+      {"text": "금", "confidence": 0.98},
+      {"text": "61000", "confidence": 0.99},
+      {"text": "61000", "confidence": 0.99},
+      {"text": "면세상품입니다", "confidence": 0.99},
+      {"text": "상품은", "confidence": 0.99},
+      {"text": "503-33-22495", "confidence": 0.99},
+      {"text": "2026-06-06", "confidence": 0.96}
+    ],
+    "expected": {
+      "merchant_name": "플레이월드 파주점",
+      "transaction_date": "2026-06-06",
+      "business_number": "503-33-22495",
+      "total_amount": 61000,
+      "final_amount": 61000,
+      "paid_amount": null,
+      "payment_method": null,
+      "review_required_expected": true
+    },
+    "risk_tags": ["top_repeated_amount", "payment_missing", "merchant_noise_guard"]
+  },
+  {
+    "sample_id": "synthetic_invalid_date_and_long_identifier_guard_001",
+    "description": "유효하지 않은 8자리 날짜와 구분자 없는 7자리 식별자는 날짜/금액으로 쓰지 않음",
+    "source_file_name": "synthetic_invalid_date_and_long_identifier_guard_001.jpg",
+    "paddle_lines": [
+      {"text": "신용카드구전표", "confidence": 0.97},
+      {"text": "63752605", "confidence": 0.99},
+      {"text": "비씨카드", "confidence": 0.99},
+      {"text": "6649629", "confidence": 0.99},
+      {"text": "롬Y릉", "confidence": 0.81},
+      {"text": "고유번호:270742960088", "confidence": 0.97},
+      {"text": "101-81-30747", "confidence": 0.99}
+    ],
+    "expected": {
+      "merchant_name": "한화호텔앤드리조트(주) 설악",
+      "transaction_date": null,
+      "business_number": "101-81-30747",
+      "total_amount": null,
+      "final_amount": null,
+      "paid_amount": null,
+      "payment_method": "카드",
+      "review_required_expected": true
+    },
+    "risk_tags": ["invalid_date_guard", "long_identifier_guard", "merchant_noise_guard"]
+  },
+  {
+    "sample_id": "synthetic_sum_checked_total_amount_001",
+    "description": "총결제금액 라벨 전 독립 금액들이 합계 검산될 때만 총액 후보 생성",
+    "source_file_name": "synthetic_sum_checked_total_amount_001.jpg",
+    "paddle_lines": [
+      {"text": "32000원", "confidence": 0.99},
+      {"text": "롬궁", "confidence": 0.81},
+      {"text": "7000원", "confidence": 0.99},
+      {"text": "받을게", "confidence": 0.99},
+      {"text": "25000원", "confidence": 0.99},
+      {"text": "260526-00047", "confidence": 0.99},
+      {"text": "결제수단", "confidence": 0.99},
+      {"text": "총결제금액", "confidence": 0.99}
+    ],
+    "expected": {
+      "transaction_date": "2026-05-26",
+      "business_number": null,
+      "total_amount": 32000,
+      "final_amount": 32000,
+      "paid_amount": null,
+      "payment_method": null,
+      "review_required_expected": true
+    },
+    "risk_tags": ["sum_checked_total", "payment_missing"]
+  }
+]

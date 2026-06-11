@@ -322,8 +322,17 @@ Expected fixture strategy for Week 10:
 - Week 10-B is implemented: safe OCR preview rows and summary are available from `app/ui/ocr_preview_utils.py`, and the PaddleOCR smoke path can show top-N safe text block previews without exposing full OCR text.
 - Week 10-C is implemented as a per-sample side-by-side report in the settings diagnostics flow. It compares Azure and PaddleOCR only through `StandardOCRResult`, `StandardOCRParserContext`, and `ReceiptParser.parse_standard_context()` output.
 - Week 10-C includes safe provider diagnostics such as `diagnostic_code` and sanitized `diagnostic_detail_code`. In local sample testing, PaddleOCR completed 10/10 image runs, while Azure may return `analyze_http_403` with `quota_or_rate_limit` when the Azure resource is currently rate-limited or quota-limited.
-- PaddleOCR candidate hints are intentionally conservative. They may add obvious date, business number, payment method, and labeled amount candidates, but they do not guess merchant names or infer totals from unlabeled maximum amounts.
+- PaddleOCR candidate hints are intentionally conservative. They may add clearly labeled merchant names, obvious date, business number, payment method, and labeled amount candidates, but they do not guess merchant names from arbitrary first lines or infer totals from unlabeled maximum amounts.
 - Week 10-D remains planned. Aggregated statistics, average processing time summaries, failure-rate summaries, field match-rate summaries, formal `field_match_score`, and fallback recommendation rules are intentionally deferred.
+
+## Week 10-D-prep Synthetic PaddleOCR Quality Fixtures
+
+- Status: implemented as a preparation step for Week 10-D.
+- Purpose: continue PaddleOCR parser-quality work while live Azure comparison is unstable due to quota/rate-limit responses.
+- Scope: sanitized synthetic PaddleOCR line fixtures are converted through `StandardOCRResult`, `StandardOCRParserContext`, and `ReceiptParser.parse_standard_context()` before comparing selected expected `ReceiptRecord` fields.
+- Fixture set: `tests/fixtures/paddle_synthetic/cases.json` covers mart/cafe/restaurant/gas/pharmacy/bookstore, explicit and missing VAT, discount and zero-payment cases, payment-method variants, business-number variants, date formats, OCR amount confusions, redacted sensitive lines, low confidence, approval-number noise, quantity noise, and footer-number noise.
+- Current sample hardening: card-sales slip patterns now cover business-block merchant candidates, split total/supply/VAT labels, and saved Azure-anchor core fields without live Azure calls.
+- Out of scope: real Azure execution, real PaddleOCR execution in default pytest, customer files, provider raw output fixtures, formal `field_match_score`, automatic Azure fallback, statistics dashboard UI, ExcelExporter changes, Processing History schema changes, and default-provider changes.
 
 ## Review UX Quality Triage
 
@@ -332,3 +341,18 @@ Expected fixture strategy for Week 10:
 - Purpose: help users quickly find records with missing merchant, date, business number, total amount, payment method, VAT review, sensitive-text, discount/zero-payment, or card-matching issues.
 - Safety: the detail panel shows only safe parsed fields and source file names, not provider raw output, full OCR text, raw JSON, full local paths, secrets, or endpoint URLs.
 - Out of scope: OCR reprocessing, automatic fallback, formal scoring, aggregate statistics UI, ExcelExporter sheet/column changes, Processing History schema changes, and provider default changes.
+
+## New Job PaddleOCR Runtime Selection
+
+- Status: implemented as an explicit per-run option on the New Job screen.
+- Scope: users can choose `PaddleOCR Local` for the current upload batch while the configured default provider remains unchanged.
+- Parser path: `StandardOCRResult` outputs are converted to `StandardOCRParserContext` and parsed through `ReceiptParser.parse_standard_context()`.
+- Safety: source file names are displayed as file names only; provider raw output, full OCR text, raw JSON, full local paths, secrets, and endpoint URLs remain hidden.
+- Out of scope: automatic Azure fallback, PDF PaddleOCR support, default provider changes, ExcelExporter sheet/column changes, Processing History schema changes, and real OCR execution in default pytest.
+
+## PaddleOCR Speed Pass
+
+- Status: implemented as a quality-preserving performance pass.
+- Scope: reuse the PaddleOCR engine instance within one `PaddleOCRProvider`, avoid repeated candidate-map extraction when building `StandardOCRParserContext`, and cache repeated compact line normalization.
+- Quality rule: no OCR quality shortcut was added; normalization fallback, candidate rules, parser rules, and review-required behavior remain intact.
+- Safety: no provider raw output, full OCR text, raw JSON, full local paths, secrets, endpoint URLs, ExcelExporter changes, Processing History schema changes, or default provider changes.

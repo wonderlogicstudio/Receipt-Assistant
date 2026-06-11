@@ -1136,3 +1136,57 @@ Provider failure diagnostics may include a safe `diagnostic_detail_code` such as
 The report may show field equality flags for the core `ReceiptRecord` fields defined in the Week 10-A contract. Week 10-C does not define or compute a formal `field_match_score`; it only leaves `azure_present`, `paddle_present`, and `is_same` per field for Week 10-D aggregation.
 
 The report must not display or persist provider raw output, full OCR text, raw JSON, full local paths, Azure endpoint URLs, operation URLs, secrets, raw tracebacks, customer files, or raw fixtures. Parser input remains `StandardOCRParserContext`; provider raw response objects are never passed to `ReceiptParser`.
+
+## Week 10-D-prep Synthetic PaddleOCR Quality Fixture Contract
+
+Synthetic PaddleOCR quality fixtures are safe standard-layer test inputs used when
+live Azure comparison is unavailable or unstable. They are not PaddleOCR provider
+raw output and are not full OCR text dumps.
+
+Fixture input contract:
+
+- Each case has `sample_id`, `description`, `source_file_name`, `paddle_lines`,
+  `expected`, and optional `risk_tags`.
+- `source_file_name` must use a `synthetic_` prefix and must be a file name only.
+- `paddle_lines` are sanitized line rows with `text`, `confidence`, and optional
+  `sensitive_category`.
+- Sensitive cases use `[REDACTED]` plus safe category names only.
+- Forbidden keys include `raw_text`, `raw_json`, `raw_response`,
+  `provider_raw_response`, `full_ocr_text`, and `paddle_raw_output`.
+
+Expected output contract:
+
+- Expected values are selected core `ReceiptRecord` fields, not accounting or tax
+  conclusions.
+- Only fields explicitly present in `expected` are compared.
+- `vat_amount: null` means no explicit VAT value may be written into
+  `ReceiptRecord.vat_amount`; estimated VAT remains a review-only reference.
+- Approval numbers, quantities, footer numbers, identifiers, and redacted lines
+  must not become amount fields.
+- The parser remains conservative: no unlabeled first-line merchant guessing and
+  no unlabeled maximum-amount total guessing.
+
+## New Job Runtime OCR Provider Selection Contract
+
+The New Job screen supports a per-run OCR provider selector. The selector may
+offer `PaddleOCR Local` as an explicit runtime override, but the configured
+default provider remains unchanged unless environment configuration changes it.
+
+Runtime provider parsing contract:
+
+```text
+Mock/Azure OCRResult -> ReceiptParser.parse(...) -> ReceiptRecord
+PaddleOCR StandardOCRResult -> StandardOCRParserContext -> ReceiptParser.parse_standard_context(...) -> ReceiptRecord
+```
+
+The PaddleOCR runtime path must not pass PaddleOCR raw output, provider raw
+response objects, raw JSON, full OCR text, full local paths, secrets, endpoint
+URLs, operation URLs, or raw tracebacks to `ReceiptParser`, `ReceiptValidator`,
+`CategoryRules`, `CardMatcher`, `ExcelExporter`, Processing History, logs, tests,
+or UI. Source file names must be reduced to file names before being copied into
+OCR or receipt records.
+
+PaddleOCR PDF handling remains unsupported/deferred in this runtime selection
+flow. This contract does not change Excel export sheets/columns, Processing
+History schema, default provider behavior, automatic fallback behavior, or
+formal quality scoring.

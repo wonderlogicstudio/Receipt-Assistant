@@ -154,4 +154,19 @@ Fallback remains a review/reprocessing candidate concept, not an automatic tax d
 
 Local sample testing showed PaddleOCR completing 10/10 image runs in the current environment, while Azure can return `analyze_http_403` with safe detail `quota_or_rate_limit` when the Azure resource is currently quota-limited or rate-limited. That condition should be counted as an Azure environment/service availability signal in Week 10-D, not as a PaddleOCR quality failure.
 
-PaddleOCR line-derived candidate hints should remain conservative. Date, business number, payment method, and clearly labeled amount candidates are acceptable. Merchant-name guesses and unlabeled maximum-amount guesses are deferred because they produced misleading field matches in early sample testing.
+PaddleOCR line-derived candidate hints should remain conservative. Clearly labeled merchant names, date, business number, payment method, and clearly labeled amount candidates are acceptable. Arbitrary first-line merchant guesses and unlabeled maximum-amount guesses remain deferred because they produced misleading field matches in early sample testing.
+
+## Week 10-D-prep Synthetic Fixture Path
+
+When Azure is unavailable, quota-limited, or rate-limited, local OCR quality work
+can continue with synthetic sanitized PaddleOCR fixtures. These fixtures are safe
+line-level inputs that are converted to `StandardOCRResult` and parsed through
+`StandardOCRParserContext`; they are not provider raw output, not full OCR text
+dumps, and not customer receipts.
+
+This path is useful for improving conservative parser behavior around labeled
+merchant names, dates, business numbers, payment methods, labeled amounts,
+explicit supply/VAT fields, redacted sensitive lines, OCR amount character
+corrections, and numeric noise guards. It does not validate real image quality or
+model-runtime behavior, so optional real-sample OCR comparison remains a later
+step after Azure quota/sample availability recovers.

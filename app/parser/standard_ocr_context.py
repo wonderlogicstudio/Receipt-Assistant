@@ -50,14 +50,15 @@ class StandardOCRParserContext(BaseModel):
 
 
 def build_parser_context_from_standard_ocr(result: StandardOCRResult) -> StandardOCRParserContext:
+    candidate_map = extract_candidate_map(result)
     context = StandardOCRParserContext(
         source_file_name=result.source_file_name,
         provider=result.provider,
         status=result.status,
         safe_text_lines=get_text_lines_for_parser(result),
-        candidate_map=extract_candidate_map(result),
-        amount_candidate_map=extract_amount_candidate_map(result),
-        non_amount_candidate_map=extract_non_amount_candidate_map(result),
+        candidate_map=candidate_map,
+        amount_candidate_map=_filter_amount_candidate_map(candidate_map),
+        non_amount_candidate_map=_filter_non_amount_candidate_map(candidate_map),
         review_hints=get_review_hints_from_standard_ocr(result),
         sensitive_categories=_unique(
             [
@@ -86,7 +87,14 @@ def extract_candidate_map(result: StandardOCRResult) -> dict[str, list[str]]:
 
 
 def extract_amount_candidate_map(result: StandardOCRResult) -> dict[str, list[str]]:
-    candidate_map = extract_candidate_map(result)
+    return _filter_amount_candidate_map(extract_candidate_map(result))
+
+
+def extract_non_amount_candidate_map(result: StandardOCRResult) -> dict[str, list[str]]:
+    return _filter_non_amount_candidate_map(extract_candidate_map(result))
+
+
+def _filter_amount_candidate_map(candidate_map: dict[str, list[str]]) -> dict[str, list[str]]:
     return {
         key: values
         for key, values in candidate_map.items()
@@ -94,8 +102,7 @@ def extract_amount_candidate_map(result: StandardOCRResult) -> dict[str, list[st
     }
 
 
-def extract_non_amount_candidate_map(result: StandardOCRResult) -> dict[str, list[str]]:
-    candidate_map = extract_candidate_map(result)
+def _filter_non_amount_candidate_map(candidate_map: dict[str, list[str]]) -> dict[str, list[str]]:
     return {
         key: values
         for key, values in candidate_map.items()

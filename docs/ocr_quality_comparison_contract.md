@@ -196,3 +196,55 @@ Provider failures may include a sanitized `diagnostic_detail_code`. Allowed exam
 PaddleOCR candidate hints are intentionally conservative. They can be generated from safe line text for obvious dates, business numbers, payment methods, and labeled amounts, but they must not guess merchant names from arbitrary top lines or infer totals from unlabeled maximum amounts.
 
 Week 10-C does not compute `field_match_score`, average processing time, failure rate, field-level match-rate summaries, fallback recommendations, or automatic Azure retries. Those remain Week 10-D scope. Provider raw output, full OCR text, raw JSON, full local paths, Azure endpoint URLs, operation URLs, secrets, raw tracebacks, real customer files, and raw OCR fixtures remain prohibited in reports, fixtures, logs, DB, Excel, and UI.
+
+## 10-D-prep Synthetic Fixture Addendum
+
+Synthetic PaddleOCR quality fixtures are allowed as safe standard-layer test
+inputs. They are not a replacement for provider raw output and must not imitate
+or store raw PaddleOCR structures.
+
+Allowed synthetic fixture shape:
+
+- `sample_id`
+- `description`
+- `source_file_name`, file name only with `synthetic_` prefix
+- `paddle_lines`, a sanitized list of line text/confidence/category rows
+- `expected`, selected core `ReceiptRecord` fields only
+- `risk_tags`
+
+The fixture flow is:
+
+`PaddleOCR synthetic sanitized lines -> StandardOCRResult ->
+StandardOCRParserContext -> ReceiptParser.parse_standard_context() ->
+ReceiptRecord -> expected core-field comparison`
+
+Synthetic fixtures may drive conservative improvements such as explicit
+merchant-label candidates, labeled amount extraction, explicit VAT/supply
+mapping, date/payment-method recognition, and amount OCR-character correction.
+They must not drive unlabeled merchant guessing, unlabeled maximum-amount total
+guessing, broken business-number coercion, raw-output storage, customer-file
+storage, automatic Azure fallback, formal `field_match_score`, or statistics UI.
+
+## Human-anchor PaddleOCR Review Addendum
+
+When Azure is unavailable or costly, local sample images may be reviewed with a
+human-visible anchor value for core fields. The anchor is used only to judge
+whether the safe `StandardOCRResult -> StandardOCRParserContext -> ReceiptRecord`
+flow produces the expected merchant, date, business number, amount, VAT, and
+payment fields.
+
+Allowed human-anchor improvements remain conservative:
+
+- exact business-number to known merchant-name mapping for local samples
+- split date fragment reconstruction, such as `2026-` plus `-05-23`
+- split business-number fragment reconstruction when the combined digits form a
+  valid 10-digit business number
+- labeled amount fragment reconstruction under supply/total labels
+- suppression of VAT over-matching when a VAT label is followed by a supply or
+  taxable-amount label
+- estimated VAT from explicit `total_amount - supply_amount` only as review
+  context, not as confirmed `vat_amount`
+
+Human-anchor review must not introduce unlabeled merchant guessing, unlabeled
+maximum-amount total inference, automatic Azure fallback, full OCR text storage,
+raw provider output storage, or customer-file fixtures.

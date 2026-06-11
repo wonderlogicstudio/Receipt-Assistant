@@ -15,12 +15,14 @@ from app.core.exceptions import ConfigurationError, FileStoreError, MissingRequi
 from app.core.enums import OCRStatus
 from app.core.ocr_models import OCRResult
 from app.core.receipt_models import ReceiptRecord
+from app.core.standard_ocr import StandardOCRResult
 from app.exporter.excel_exporter import ExcelExporter
 from app.history.job_service import JobHistoryService
 from app.ocr.base import OCRProvider
 from app.ocr.provider_factory import get_ocr_provider
 from app.parser.card_statement_parser import CardStatementParser
 from app.parser.receipt_parser import ReceiptParser, parse_amount, parse_date
+from app.parser.standard_ocr_context import build_parser_context_from_standard_ocr
 from app.storage.file_store import FileStore, StoredFileMetadata
 from app.ui.review_view import render_review_view
 from app.ui.review_utils import build_review_summary
@@ -49,7 +51,7 @@ RECEIPT_EXTENSIONS = {".jpg", ".jpeg", ".png", ".pdf"}
 CARD_STATEMENT_EXTENSIONS = {".xlsx", ".csv"}
 EXPORT_MIME_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 RUNTIME_PROVIDER_CURRENT = "__current__"
-RUNTIME_OCR_PROVIDER_OPTIONS = (RUNTIME_PROVIDER_CURRENT, "mock", "azure")
+RUNTIME_OCR_PROVIDER_OPTIONS = (RUNTIME_PROVIDER_CURRENT, "mock", "azure", "paddle")
 
 
 @dataclass(frozen=True)
@@ -62,7 +64,7 @@ class RoutedUploadedFiles:
 @dataclass(frozen=True)
 class ReceiptProcessingResult:
     receipt_records: list[ReceiptRecord]
-    ocr_results: list[OCRResult]
+    ocr_results: list[OCRResult | StandardOCRResult]
     errors: list[str]
 
 
@@ -78,7 +80,7 @@ class ProcessingPipelineResult:
     uploaded_file_metadata: list[StoredFileMetadata]
     receipt_records: list[ReceiptRecord]
     card_transactions: list[CardTransaction]
-    ocr_results: list[OCRResult]
+    ocr_results: list[OCRResult | StandardOCRResult]
     card_parse_results: list[CardParseResult]
     errors: list[str]
 
@@ -425,7 +427,7 @@ def process_receipt_files_with_mock_ocr(
     parser = ReceiptParser()
     validator = ReceiptValidator()
     receipt_records: list[ReceiptRecord] = []
-    ocr_results: list[OCRResult] = []
+    ocr_results: list[OCRResult | StandardOCRResult] = []
     errors: list[str] = []
     try:
         provider = ocr_provider or get_ocr_provider(build_runtime_ocr_config(ocr_provider_name))
@@ -442,7 +444,7 @@ def process_receipt_files_with_mock_ocr(
                 f"OCR 처리 상태를 확인해 주세요. ({format_ocr_diagnostic(ocr_result)})"
             )
             continue
-        receipt_records.append(validator.validate(parser.parse(ocr_result)))
+        receipt_records.append(validator.validate(_parse_ocr_result(parser, ocr_result, metadata)))
 
     return ReceiptProcessingResult(receipt_records=receipt_records, ocr_results=ocr_results, errors=errors)
 
@@ -452,6 +454,7 @@ def render_runtime_ocr_provider_selector(configured_provider: str | None) -> str
         RUNTIME_PROVIDER_CURRENT: f"현재 설정 사용 ({configured_provider or 'mock'})",
         "mock": "Mock OCR",
         "azure": "Azure Document Intelligence",
+        "paddle": "PaddleOCR Local",
     }
     selected = st.selectbox(
         "이번 처리 OCR provider",
@@ -461,7 +464,8 @@ def render_runtime_ocr_provider_selector(configured_provider: str | None) -> str
     )
     provider_name = resolve_runtime_ocr_provider_name(selected, configured_provider)
     st.caption(f"이번 업로드 처리에 사용할 OCR provider: {provider_name}")
-    st.caption("PaddleOCR 실제 실행은 설정 화면의 opt-in smoke test에서 별도로 확인합니다.")
+    if provider_name in {"paddle", "paddleocr"}:
+        st.caption("PaddleOCR Local은 이미지 파일 우선 PoC입니다. PDF는 현재 deferred/unsupported 상태로 검토 안내됩니다.")
     return provider_name
 
 
@@ -470,7 +474,7 @@ def resolve_runtime_ocr_provider_name(selection: str | None, configured_provider
     safe_selection = (selection or RUNTIME_PROVIDER_CURRENT).strip().lower()
     if safe_selection == RUNTIME_PROVIDER_CURRENT:
         return safe_configured_provider
-    if safe_selection in {"mock", "azure"}:
+    if safe_selection in {"mock", "azure", "paddle", "paddleocr"}:
         return safe_selection
     return safe_configured_provider
 
@@ -615,17 +619,45 @@ def _copy_card_parse_result_metadata(parse_result: CardParseResult, metadata: St
     )
 
 
-def _copy_ocr_result_metadata(ocr_result: OCRResult, metadata: StoredFileMetadata) -> OCRResult:
+def _parse_ocr_result(
+    parser: ReceiptParser,
+    ocr_result: OCRResult | StandardOCRResult,
+    metadata: StoredFileMetadata,
+) -> ReceiptRecord:
+    if isinstance(ocr_result, StandardOCRResult):
+        context = build_parser_context_from_standard_ocr(ocr_result)
+        return parser.parse_standard_context(
+            context,
+            source_file_id=_source_file_id(metadata),
+            source_file_name=_display_file_name(metadata.original_file_name),
+            ocr_provider=ocr_result.provider,
+            confidence=ocr_result.confidence,
+        )
+    return parser.parse(ocr_result)
+
+
+def _copy_ocr_result_metadata(
+    ocr_result: OCRResult | StandardOCRResult,
+    metadata: StoredFileMetadata,
+) -> OCRResult | StandardOCRResult:
     source_file_id = _source_file_id(metadata)
+    safe_source_file_name = _display_file_name(metadata.original_file_name)
+    if isinstance(ocr_result, StandardOCRResult):
+        return ocr_result.model_copy(
+            update={
+                "source_file_id": source_file_id,
+                "source_file_name": safe_source_file_name,
+            }
+        )
     return replace(
         ocr_result,
         source_file_id=source_file_id,
-        source_file_name=metadata.original_file_name,
+        source_file_name=safe_source_file_name,
         stored_relative_path=metadata.stored_relative_path,
     )
 
 
-def format_ocr_diagnostic(ocr_result: OCRResult) -> str:
+def format_ocr_diagnostic(ocr_result: OCRResult | StandardOCRResult) -> str:
     status = _safe_diagnostic_token(ocr_result.status, fallback="unknown")
     provider = _safe_diagnostic_token(ocr_result.provider, fallback="unknown")
     reason = _safe_diagnostic_token(ocr_result.diagnostic_code, fallback="ocr_status_not_completed")

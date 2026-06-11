@@ -263,6 +263,37 @@ Rollback or correction is required if the change introduces any of the following
 
 Safe diagnostic detail codes are allowed for provider failures when they are sanitized categories only, for example `quota_or_rate_limit` for Azure HTTP 403 quota/rate-limit responses. Roll back or correct the change if raw Azure error messages, endpoint URLs, operation URLs, request headers, keys, raw tracebacks, or provider payloads are exposed as diagnostic details.
 
+## Week 10-D-prep Synthetic PaddleOCR Fixture Change Control
+
+Week 10-D-prep may add synthetic sanitized PaddleOCR line fixtures, expected
+`ReceiptRecord` baselines, and fixture-driven parser tests. It may improve parser
+or Paddle candidate rules only when the rule is conservative and label-based.
+
+Allowed improvements:
+
+- Merchant candidates from explicit labels such as `상호`, `상호명`, `매장명`,
+  `가맹점명`, and `점포명`.
+- Date, business-number, payment-method, labeled amount, explicit supply/VAT, and
+  amount OCR-character normalization rules.
+- Security tests that reject raw payload keys, full paths, endpoints, secrets,
+  tokens, and sensitive full values.
+
+Rollback or correction is required if any of the following occur:
+
+- Default pytest calls live Azure, imports/executes real PaddleOCR, or downloads
+  OCR models.
+- Fixture files include customer receipts, provider raw output, full OCR text,
+  raw JSON, full local paths, endpoints, secrets, tokens, full card numbers, full
+  phone numbers, resident registration numbers, passwords, or WiFi passwords.
+- Parser changes guess merchant names from unlabeled first lines, infer totals
+  from unlabeled maximum amounts, force broken business numbers into valid
+  shapes, or use redacted sensitive lines as candidates.
+- Existing parser, adapter, ExcelExporter, Processing History, provider default,
+  or side-by-side comparison regressions fail.
+- The change implements automatic Azure fallback, formal `field_match_score`,
+  aggregate statistics UI, ExcelExporter sheet/column changes, or Processing
+  History schema changes.
+
 ## Review UX Quality Triage Change Control
 
 Review UX triage may add safe, derived review indicators and filters from
@@ -284,3 +315,57 @@ Rollback or correction is required if any of the following occur:
 - The change modifies ExcelExporter sheets/columns, Processing History schema,
   default OCR provider selection, automatic fallback behavior, or formal quality
   scoring.
+
+## New Job PaddleOCR Runtime Selection Change Control
+
+The New Job screen may expose `PaddleOCR Local` as an explicit per-run OCR
+provider option. This is a runtime override only and must not change the
+configured default provider.
+
+Allowed changes:
+
+- Add `paddle`/`paddleocr` to the New Job runtime provider selection allowlist.
+- Route `StandardOCRResult` outputs through `StandardOCRParserContext` before
+  parsing.
+- Show a short PaddleOCR PDF unsupported/deferred note when selected.
+- Store and display source file names only.
+
+Rollback or correction is required if any of the following occur:
+
+- The configured default OCR provider changes.
+- Default pytest runs real PaddleOCR, downloads OCR models, or requires
+  `paddleocr` to be installed.
+- Provider raw output, full OCR text, raw JSON, full local paths, secrets,
+  endpoint URLs, operation URLs, or raw tracebacks are displayed, persisted,
+  logged, or added to fixtures.
+- Parser receives PaddleOCR raw output or any provider raw response object.
+- ExcelExporter sheets/columns or Processing History schema change.
+- Automatic Azure fallback, formal `field_match_score`, or PDF PaddleOCR support
+  is implemented as part of this change.
+
+## PaddleOCR Speed Pass Change Control
+
+Performance work may reduce repeated local computation only when parsed output
+quality and review behavior are preserved.
+
+Allowed changes:
+
+- Reuse a `PaddleOCRProvider` OCR engine instance for multiple images in the same
+  provider instance.
+- Cache pure text normalization helpers with bounded caches.
+- Avoid repeated extraction of the same standard OCR candidate map during parser
+  context construction.
+
+Rollback or correction is required if any of the following occur:
+
+- OCR quality, parser field extraction, candidate generation, validation,
+  review-required behavior, or safe diagnostics regress.
+- A performance shortcut disables image normalization fallback, candidate hints,
+  parser checks, or validator checks.
+- Default pytest runs real PaddleOCR, downloads OCR models, or requires
+  `paddleocr`.
+- Provider raw output, full OCR text, raw JSON, full local paths, secrets,
+  endpoint URLs, operation URLs, or raw tracebacks are exposed.
+- Default provider behavior, ExcelExporter sheets/columns, Processing History
+  schema, automatic Azure fallback, formal scoring, or PDF PaddleOCR handling
+  changes.

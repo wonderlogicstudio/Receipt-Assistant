@@ -424,6 +424,22 @@ python -m pytest tests/test_settings_utils.py
 - [x] No default pytest path calls real Azure or real PaddleOCR.
 - [ ] Week 10-D statistics, formal score, aggregate fallback criteria, and fallback recommendation rules remain unimplemented by design.
 
+## Week 10-D-prep Synthetic PaddleOCR Quality Fixtures
+
+- [x] Synthetic PaddleOCR fixture README added.
+- [x] Synthetic cases added with safe `synthetic_` sample ids and file names.
+- [x] Fixture lines are sanitized `paddle_lines`, not provider raw output.
+- [x] Expected baselines compare selected `ReceiptRecord` core fields only.
+- [x] Forbidden payload keys and strings are checked in fixture, standard result, parser context, and parsed record output.
+- [x] Sensitive scenarios use `[REDACTED]` and safe category names only.
+- [x] Basic merchant/date/business/payment/labeled-amount/VAT cases are covered.
+- [x] Discount, zero-payment, OCR amount correction, amount spacing, low confidence, approval-number noise, quantity noise, and footer-number noise cases are covered.
+- [x] Card-sales slip sample pattern is covered with business-block merchant extraction and split total/supply/VAT label-value lines.
+- [x] Saved Azure-anchor core fields are tested without a live Azure call.
+- [x] Default pytest does not call live Azure.
+- [x] Default pytest does not import or execute real PaddleOCR.
+- [x] ExcelExporter sheets/columns, Processing History schema, default provider, automatic fallback, formal score, and statistics UI remain unchanged.
+
 ## Review UX Quality Triage
 
 - [x] Review table shows manual triage columns for priority, missing fields, and quality-check flags.
@@ -431,3 +447,24 @@ python -m pytest tests/test_settings_utils.py
 - [x] Selected-receipt detail panel shows only safe parsed fields and source file names.
 - [x] Detail and table views do not expose provider raw output, full OCR text, raw JSON, full local paths, secrets, or endpoint URLs.
 - [x] ExcelExporter sheets/columns, Processing History schema, default provider, automatic fallback, formal score, and statistics UI remain unchanged.
+
+## New Job PaddleOCR Runtime Selection
+
+- [x] New Job per-run OCR provider selector includes `PaddleOCR Local`.
+- [x] Configured default OCR provider remains unchanged.
+- [x] `paddle` and `paddleocr` selections resolve as explicit runtime overrides.
+- [x] `StandardOCRResult` provider output is parsed through `StandardOCRParserContext`.
+- [x] The UI and processing result use source file names only, not full local paths.
+- [x] Provider raw output, full OCR text, raw JSON, secrets, endpoint URLs, and raw tracebacks are not displayed.
+- [x] PaddleOCR PDF handling remains unsupported/deferred.
+- [x] Default pytest does not run real PaddleOCR or download OCR models.
+- [x] ExcelExporter sheets/columns and Processing History schema remain unchanged.
+
+## PaddleOCR Speed Pass
+
+- [x] PaddleOCR engine instance is reused within one provider instance.
+- [x] Standard OCR parser context builds the candidate map once before splitting amount and non-amount candidates.
+- [x] Repeated compact line normalization uses a bounded cache.
+- [x] No quality-reducing shortcut disables normalization fallback, candidate hints, parser checks, validation, or review-required behavior.
+- [x] Default pytest still does not run real PaddleOCR or download OCR models.
+- [x] ExcelExporter sheets/columns, Processing History schema, default provider, automatic fallback, and formal score remain unchanged.

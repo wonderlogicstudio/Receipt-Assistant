@@ -72,6 +72,25 @@ DISCOUNT_LINE_HINT_KEYWORDS = ("할인", "쿠폰", "포인트", "멤버십", "�
 DISCOUNT_AMOUNT_LABELS = tuple(_compact_amount_label(keyword) for keyword in DISCOUNT_AMOUNT_KEYWORDS)
 DISCOUNT_SUMMARY_LABELS = tuple(_compact_amount_label(keyword) for keyword in DISCOUNT_SUMMARY_KEYWORDS)
 DISCOUNT_TARGET_AMOUNT_LABELS = tuple(_compact_amount_label(keyword) for keyword in DISCOUNT_TARGET_AMOUNT_KEYWORDS)
+NON_DISCOUNT_AMOUNT_LABELS = tuple(
+    _compact_amount_label(keyword)
+    for keyword in (
+        "판매금액",
+        "합계금액",
+        "합계",
+        "총액",
+        "총금액",
+        "받은금액",
+        "결제금액",
+        "카드결제",
+        "현금결제",
+        "승인금액",
+        "공급가액",
+        "공급가",
+        "부가세",
+        "VAT",
+    )
+)
 DISCOUNT_FUZZY_THRESHOLD = 0.72
 DISCOUNT_FUZZY_MARGIN = 0.03
 FINAL_AMOUNT_LABELS = tuple(
@@ -323,7 +342,7 @@ class ReceiptParser:
         business_number_value = (
             raw_json.get("business_number")
             or _extract_keyword_value(raw_text, BUSINESS_NUMBER_KEYWORDS, BUSINESS_NUMBER_VALUE_PATTERN)
-            or _find_first(raw_text, BUSINESS_NUMBER_PATTERN)
+            or _find_business_number_with_context(raw_text)
         )
         business_number = normalize_business_number(business_number_value)
         merchant_name, merchant_warnings = _extract_merchant_name(raw_text, raw_json, business_number)
@@ -417,9 +436,12 @@ def _apply_standard_context_candidates(fields: dict[str, Any], context: Standard
     )
     business_number = normalize_business_number(business_number_candidate)
     payment_method = normalize_merchant_name(_first_context_value(context.candidate_map, "payment_method"))
+    merchant_from_business_number = find_merchant_by_business_number(business_number)
+    if not _should_prefer_business_number_merchant(merchant_name, merchant_from_business_number):
+        merchant_from_business_number = None
 
     fields["transaction_date"] = transaction_date or fields["transaction_date"]
-    fields["merchant_name"] = merchant_name or fields["merchant_name"]
+    fields["merchant_name"] = merchant_from_business_number or merchant_name or fields["merchant_name"]
     fields["business_number_candidate"] = business_number_candidate or fields["business_number_candidate"]
     fields["business_number"] = business_number or fields["business_number"]
     fields["payment_method"] = payment_method or fields["payment_method"]
@@ -448,12 +470,30 @@ def _apply_standard_context_amounts(fields: dict[str, Any], context: StandardOCR
     amount_warnings: list[str] = list(fields.get("amount_warnings", []))
     if fields["discount_amount"] is not None and fields["discount_amount"] > 0:
         amount_warnings.append("discount_detected")
+    if (
+        fields["discount_amount"] in (None, 0)
+        and fields["final_amount"] is not None
+        and fields["paid_amount"] is not None
+        and fields["paid_amount"] > fields["final_amount"]
+        and fields["paid_amount"] - fields["final_amount"] >= 10000
+    ):
+        fields["final_amount"] = fields["paid_amount"]
+        amount_warnings.append("final_amount_replaced_by_paid_amount_candidate")
     if fields["final_amount"] is not None and fields["paid_amount"] is not None and fields["final_amount"] != fields["paid_amount"]:
         amount_warnings.append("final_paid_amount_mismatch")
 
     if total_amount is not None:
         fields["total_amount"] = total_amount
         fields["amount_source"] = "total_amount"
+        if (
+            fields["discount_amount"] in (None, 0)
+            and fields["paid_amount"] is not None
+            and fields["paid_amount"] > fields["total_amount"]
+            and fields["paid_amount"] - fields["total_amount"] >= 10000
+        ):
+            fields["total_amount"] = fields["paid_amount"]
+            fields["amount_source"] = "paid_amount_corrected_total"
+            amount_warnings.append("total_amount_replaced_by_paid_amount_candidate")
     else:
         chosen_total, amount_source = _choose_total_amount(
             paid_amount=fields["paid_amount"],
@@ -466,6 +506,20 @@ def _apply_standard_context_amounts(fields: dict[str, Any], context: StandardOCR
         fields["amount_source"] = amount_source
         if chosen_total is None:
             amount_warnings.append("amount_source_low_confidence")
+    if (
+        fields["discount_amount"] in (None, 0)
+        and fields["total_amount"] is not None
+        and fields["paid_amount"] is not None
+        and fields["total_amount"] > fields["paid_amount"] > 0
+        and fields["total_amount"] - fields["paid_amount"] >= 100
+        and fields["final_amount"] in (None, fields["total_amount"])
+    ):
+        fields["discount_amount"] = fields["total_amount"] - fields["paid_amount"]
+        fields["final_amount"] = fields["paid_amount"]
+        amount_warnings.append("discount_inferred_from_total_paid_difference")
+        amount_warnings = [
+            warning for warning in amount_warnings if warning != "final_paid_amount_mismatch"
+        ]
 
     if fields["total_amount"] == 0 and fields["discount_amount"] is not None and fields["discount_amount"] > 0:
         amount_warnings.append("zero_payment_after_discount")
@@ -487,6 +541,24 @@ def _apply_standard_context_vat(fields: dict[str, Any], context: StandardOCRPars
         fields["vat_note"] = "영수증에 부가세가 명시되어 있음"
         fields["vat_review_required"] = bool(vat_review_hint)
         fields["vat_warnings"] = _unique(list(fields.get("vat_warnings", [])) + (["vat_review_hint"] if vat_review_hint else []))
+        if supply_amount is not None and supply_amount > 0:
+            explicit_tax_total = supply_amount + vat_amount
+            amount_warnings = list(fields.get("amount_warnings", []))
+            for field_name in ("total_amount", "final_amount", "paid_amount"):
+                current_amount = fields.get(field_name)
+                if (
+                    current_amount is not None
+                    and current_amount != explicit_tax_total
+                    and abs(current_amount - explicit_tax_total) <= 1000
+                    and fields.get("discount_amount") in (None, 0)
+                ):
+                    fields[field_name] = explicit_tax_total
+                    amount_warnings.append(f"{field_name}_replaced_by_explicit_vat_total")
+            if fields.get("final_amount") == fields.get("paid_amount"):
+                amount_warnings = [
+                    warning for warning in amount_warnings if warning != "final_paid_amount_mismatch"
+                ]
+            fields["amount_warnings"] = _unique(amount_warnings)
         return
 
     total_amount = fields["total_amount"]
@@ -495,7 +567,18 @@ def _apply_standard_context_vat(fields: dict[str, Any], context: StandardOCRPars
         vat_warnings.append("vat_review_hint")
         vat_warnings.append("vat_not_explicit")
     if total_amount is not None and total_amount > 0:
-        estimated_supply, estimated_vat = calculate_estimated_vat_amounts(total_amount)
+        if supply_amount is not None and 0 < supply_amount < total_amount:
+            supply_difference = total_amount - supply_amount
+            if abs(round(supply_amount / 10) - supply_difference) <= 2:
+                estimated_supply = supply_amount
+                estimated_vat = supply_difference
+                vat_warnings.append("vat_estimated_from_supply_difference")
+            else:
+                estimated_supply, estimated_vat = calculate_estimated_vat_amounts(total_amount)
+                fields["supply_amount"] = None
+                vat_warnings.append("supply_amount_inconsistent_with_total_ignored")
+        else:
+            estimated_supply, estimated_vat = calculate_estimated_vat_amounts(total_amount)
         fields["estimated_supply_amount"] = estimated_supply
         fields["estimated_vat_amount"] = estimated_vat
         fields["vat_source"] = "estimated_reference"
@@ -592,7 +675,7 @@ def _safe_warning_text(value: object) -> str:
 DATE_PATTERN = r"\d{4}[-./]?\d{2}[-./]?\d{2}(?:\s+\d{1,2}:\d{2}(?::\d{2})?)?"
 AMOUNT_PATTERN = r"[\-－−–—]?\s*(?:₩\s*)?(?:(?:\d{1,3}(?:(?:\s*[,\.]\s*|\s+)\d{3})+)|\d+)(?:원)?"
 OCR_AMOUNT_PATTERN = r"(?<![A-Za-z가-힣])[\-－−–—]?\s*(?:₩\s*)?(?:(?:[0-9OoIl|BSㅇ]{1,3}(?:(?:\s*[,\.]\s*|\s+)[0-9OoIl|BSㅇ]{3})+)|[0-9OoIl|BSㅇ]+)(?:원)?(?![A-Za-z가-힣])"
-BUSINESS_NUMBER_PATTERN = r"\d{3}-?\d{2}-?\d{5}"
+BUSINESS_NUMBER_PATTERN = r"(?<!\d)\d{3}-?\d{2}-?\d{5}(?!\d)"
 BUSINESS_NUMBER_VALUE_PATTERN = r"[0-9-]{8,14}"
 
 
@@ -603,6 +686,43 @@ def _extract_keyword_value(text: str, keywords: tuple[str, ...], value_pattern: 
         if match:
             return match.group(1).strip()
     return None
+
+
+def _find_business_number_with_context(text: str) -> str | None:
+    lines = [line.strip() for line in str(text or "").splitlines()]
+    for index, line in enumerate(lines):
+        match = re.search(BUSINESS_NUMBER_PATTERN, line)
+        if not match:
+            continue
+        if not _has_valid_business_number_checksum(match.group(0)):
+            continue
+        nearby_text = " ".join(lines[max(index - 2, 0) : min(index + 3, len(lines))])
+        nearby_compact = re.sub(r"\s+", "", nearby_text).upper()
+        has_business_evidence = any(
+            token in nearby_compact
+            for token in ("사업자", "사업자등록", "고유번호", "NO", "N0")
+        ) or "[" in nearby_text or "]" in nearby_text
+        has_card_evidence = any(
+            token in nearby_compact
+            for token in ("카드번호", "카드종류", "카드명", "일시불", "승인번호", "POS")
+        )
+        if "*" in line or has_card_evidence:
+            continue
+        if has_business_evidence or index <= 10:
+            return match.group(0)
+    return None
+
+
+def _has_valid_business_number_checksum(value: str) -> bool:
+    digits = re.sub(r"\D", "", str(value or ""))
+    if len(digits) != 10:
+        return False
+    numbers = [int(char) for char in digits]
+    weights = [1, 3, 7, 1, 3, 7, 1, 3]
+    checksum_sum = sum(numbers[index] * weights[index] for index in range(8))
+    ninth_product = numbers[8] * 5
+    checksum_sum += ninth_product // 10 + ninth_product % 10
+    return (10 - (checksum_sum % 10)) % 10 == numbers[9]
 
 
 def _extract_amount_fields(raw_text: str, raw_json: dict[str, Any]) -> dict[str, Any]:
@@ -907,6 +1027,8 @@ def _is_amount_reference_label_line(line: str) -> bool:
 def classify_discount_label(line: str) -> dict[str, object]:
     compact = _compact_label_part(line)
     if len(compact) < 3 or not any(character.isalpha() or "가" <= character <= "힣" for character in compact):
+        return {"line_type": "unknown", "label_match_method": "none", "score": 0.0}
+    if any(compact.startswith(label) for label in NON_DISCOUNT_AMOUNT_LABELS):
         return {"line_type": "unknown", "label_match_method": "none", "score": 0.0}
     if any(compact.startswith(label) for label in DISCOUNT_TARGET_AMOUNT_LABELS):
         return {"line_type": "discount_target", "label_match_method": "compact", "score": 1.0}
@@ -1511,6 +1633,23 @@ def _extract_merchant_name(
     return None, []
 
 
+def _should_prefer_business_number_merchant(
+    current_merchant: str | None,
+    business_number_merchant: str | None,
+) -> bool:
+    if not business_number_merchant:
+        return False
+    if not current_merchant:
+        return True
+    current_compact = re.sub(r"[^0-9A-Za-z가-힣]", "", current_merchant).lower()
+    dictionary_compact = re.sub(r"[^0-9A-Za-z가-힣]", "", business_number_merchant).lower()
+    if not current_compact:
+        return True
+    if not re.search(r"[가-힣]", current_merchant):
+        return True
+    return current_compact in dictionary_compact or dictionary_compact in current_compact
+
+
 def _merchant_from_json(raw_json: dict[str, Any]) -> str | None:
     return _find_merchant_value_in_json(raw_json)
 
@@ -1599,6 +1738,9 @@ def _is_usable_merchant_candidate(value: str | None) -> bool:
     if is_product_line_text(candidate):
         return False
     if is_receipt_metadata_line(candidate):
+        return False
+    compact = re.sub(r"\s+", "", candidate)
+    if compact.startswith(("대표", "대표자", "주소", "TEL", "Tel", "tel", "전화")):
         return False
     return True
 

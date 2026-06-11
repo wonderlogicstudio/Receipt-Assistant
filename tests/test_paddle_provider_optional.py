@@ -154,6 +154,46 @@ def test_fake_paddleocr_success_returns_standard_result(tmp_path) -> None:
     assert_no_forbidden_output(result)
 
 
+def test_paddle_provider_reuses_ocr_instance_for_multiple_images(tmp_path) -> None:
+    first_image_path = tmp_path / "receipt_1.png"
+    second_image_path = tmp_path / "receipt_2.png"
+    first_image_path.write_bytes(b"fake image bytes")
+    second_image_path.write_bytes(b"fake image bytes")
+    init_calls = 0
+    ocr_calls: list[str] = []
+
+    class FakePaddleOCR:
+        def __init__(self, **kwargs: object) -> None:
+            nonlocal init_calls
+            init_calls += 1
+            self.kwargs = kwargs
+
+        def ocr(self, path: str, cls: bool = True) -> dict:
+            ocr_calls.append(Path(path).name)
+            return {
+                "rec_texts": ["SAMPLE CAFE", "2026-06-10", "TOTAL 12000", "CARD"],
+                "rec_scores": [0.98, 0.97, 0.96, 0.95],
+                "dt_polys": [
+                    [[10, 10], [220, 10], [220, 42], [10, 42]],
+                    [[10, 50], [220, 50], [220, 82], [10, 82]],
+                    [[10, 90], [260, 90], [260, 122], [10, 122]],
+                    [[10, 130], [260, 130], [260, 162], [10, 162]],
+                ],
+            }
+
+    provider = PaddleOCRProvider(ocr_factory=FakePaddleOCR)
+
+    first_result = provider.extract(first_image_path, source_file_name="receipt_1.png")
+    second_result = provider.extract(second_image_path, source_file_name="receipt_2.png")
+
+    assert init_calls == 1
+    assert ocr_calls[:2] == ["receipt_1.png", "receipt_2.png"]
+    assert first_result.status == "completed"
+    assert second_result.status == "completed"
+    assert_no_forbidden_output(first_result)
+    assert_no_forbidden_output(second_result)
+
+
 def test_fake_sanitized_mapping_uses_paddle_standard_adapter(tmp_path) -> None:
     image_path = tmp_path / "receipt.jpg"
     image_path.write_bytes(b"fake image bytes")
@@ -246,7 +286,7 @@ def test_paddle_provider_generates_safe_candidate_hints_from_lines(tmp_path) -> 
                 "rec_texts": [
                     "SAMPLE CAFE",
                     "2026-02-16 12:30",
-                    "사업자등록번호 123-45-67890",
+                    "사업자등록번호 123-45-67891",
                     "카드결제 35,700",
                 ],
                 "rec_scores": [0.98, 0.95, 0.94, 0.96],
@@ -265,7 +305,7 @@ def test_paddle_provider_generates_safe_candidate_hints_from_lines(tmp_path) -> 
 
     candidates = {candidate.candidate_type: candidate.normalized_value for candidate in result.key_value_candidates}
     assert candidates["transaction_date"] == "2026-02-16 12:30"
-    assert candidates["business_number"] == "123-45-67890"
+    assert candidates["business_number"] == "123-45-67891"
     assert candidates["payment_method"] == "카드"
     assert candidates["paid_amount"] == "35700"
     assert candidates["total_amount"] == "35700"
