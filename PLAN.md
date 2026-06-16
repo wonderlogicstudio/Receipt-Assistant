@@ -331,7 +331,7 @@ Expected fixture strategy for Week 10:
 - Purpose: continue PaddleOCR parser-quality work while live Azure comparison is unstable due to quota/rate-limit responses.
 - Scope: sanitized synthetic PaddleOCR line fixtures are converted through `StandardOCRResult`, `StandardOCRParserContext`, and `ReceiptParser.parse_standard_context()` before comparing selected expected `ReceiptRecord` fields.
 - Fixture set: `tests/fixtures/paddle_synthetic/cases.json` covers mart/cafe/restaurant/gas/pharmacy/bookstore, explicit and missing VAT, discount and zero-payment cases, payment-method variants, business-number variants, date formats, OCR amount confusions, redacted sensitive lines, low confidence, approval-number noise, quantity noise, and footer-number noise.
-- Current sample hardening: card-sales slip patterns now cover business-block merchant candidates, split total/supply/VAT labels, and saved Azure-anchor core fields without live Azure calls.
+- Current sample hardening: card-sales slip patterns now cover business-block merchant candidates, same-line merchant segments before valid business numbers, split total/supply/VAT labels, split `매출일`/`매장명` label-value lines on rotated receipts, compact approval date-time lines, and saved Azure-anchor core fields without live Azure calls.
 - Out of scope: real Azure execution, real PaddleOCR execution in default pytest, customer files, provider raw output fixtures, formal `field_match_score`, automatic Azure fallback, statistics dashboard UI, ExcelExporter changes, Processing History schema changes, and default-provider changes.
 
 ## Review UX Quality Triage
@@ -356,3 +356,12 @@ Expected fixture strategy for Week 10:
 - Scope: reuse the PaddleOCR engine instance within one `PaddleOCRProvider`, avoid repeated candidate-map extraction when building `StandardOCRParserContext`, and cache repeated compact line normalization.
 - Quality rule: no OCR quality shortcut was added; normalization fallback, candidate rules, parser rules, and review-required behavior remain intact.
 - Safety: no provider raw output, full OCR text, raw JSON, full local paths, secrets, endpoint URLs, ExcelExporter changes, Processing History schema changes, or default provider changes.
+
+## Review UI Receipt Source Preview
+
+- Status: implemented as a safe review convenience layer.
+- Scope: the review table shows priority, missing fields, review-reason summary, source file name, and source preview status. A selected row drives a safe source preview panel.
+- Preview behavior: JPG/JPEG/PNG files under the configured upload root are shown with `st.image`; PDF files show a PDF notice instead of forced rendering.
+- Selection behavior: the selected row id and row number are stored in session state, and the selected row is highlighted in a read-only selection table while the existing editable review table remains unchanged.
+- Safety: preview resolution uses `stored_relative_path` only, blocks traversal and files outside `data/uploads`, and never displays full local paths, OCR raw text, provider raw JSON, or sensitive values.
+- Out of scope: mobile/PWA work, OCR provider changes, PaddleOCR accuracy changes, OpenAI correction, ExcelExporter changes, Processing History schema changes, and customer test fixtures.

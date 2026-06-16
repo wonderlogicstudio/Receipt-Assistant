@@ -435,6 +435,9 @@ python -m pytest tests/test_settings_utils.py
 - [x] Basic merchant/date/business/payment/labeled-amount/VAT cases are covered.
 - [x] Discount, zero-payment, OCR amount correction, amount spacing, low confidence, approval-number noise, quantity noise, and footer-number noise cases are covered.
 - [x] Card-sales slip sample pattern is covered with business-block merchant extraction and split total/supply/VAT label-value lines.
+- [x] Rotated receipt-style split `매출일` and `매장명` label-value lines are covered without customer image fixtures.
+- [x] Unlabeled same-line merchant segments before valid business numbers are covered with synthetic fixtures.
+- [x] Compact `YYYYMMDD` approval date-time lines are covered without treating approval numbers as dates.
 - [x] Saved Azure-anchor core fields are tested without a live Azure call.
 - [x] Default pytest does not call live Azure.
 - [x] Default pytest does not import or execute real PaddleOCR.
@@ -452,6 +455,8 @@ python -m pytest tests/test_settings_utils.py
 
 - [x] New Job per-run OCR provider selector includes `PaddleOCR Local`.
 - [x] Configured default OCR provider remains unchanged.
+- [x] PaddleOCR Local shows a per-run CPU/GPU execution option with CPU as the default.
+- [x] GPU mode uses safe Paddle CUDA/device diagnostics and blocks the run when CUDA is unavailable.
 - [x] `paddle` and `paddleocr` selections resolve as explicit runtime overrides.
 - [x] `StandardOCRResult` provider output is parsed through `StandardOCRParserContext`.
 - [x] The UI and processing result use source file names only, not full local paths.
@@ -468,3 +473,17 @@ python -m pytest tests/test_settings_utils.py
 - [x] No quality-reducing shortcut disables normalization fallback, candidate hints, parser checks, validation, or review-required behavior.
 - [x] Default pytest still does not run real PaddleOCR or download OCR models.
 - [x] ExcelExporter sheets/columns, Processing History schema, default provider, automatic fallback, and formal score remain unchanged.
+
+## Review UI Receipt Source Preview
+
+- [x] Review table includes review priority, missing fields, review-reason summary, source file name, and source preview status.
+- [x] Review priority uses HIGH, MEDIUM, and LOW labels.
+- [x] Missing fields show core field names such as `transaction_date`, `merchant_name`, `total_amount`, and `expense_category`.
+- [x] Default review table order is HIGH, then MEDIUM, then LOW while preserving original order within each priority.
+- [x] Selected receipt id and selected row number are stored in session state.
+- [x] Selected row is highlighted in a read-only selection table.
+- [x] JPG/JPEG/PNG source files under the upload root can be previewed with `st.image`.
+- [x] PDF source files show a safe PDF notice without forced rendering.
+- [x] Source preview blocks path traversal and files outside `data/uploads`.
+- [x] Full local paths, OCR raw text, provider raw JSON, and sensitive raw values are not displayed.
+- [x] Existing review editing, exclusion, Excel export, and Processing History flows remain unchanged.

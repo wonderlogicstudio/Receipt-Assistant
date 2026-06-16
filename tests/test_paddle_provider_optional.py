@@ -3,10 +3,16 @@ from __future__ import annotations
 import ast
 import json
 import re
+import sys
+import types
 from pathlib import Path
 
 from app.core.standard_ocr import StandardOCRResult
-from app.ocr.paddle_provider import PaddleOCRProvider, PaddleOCRUnavailable
+from app.ocr.paddle_provider import (
+    PaddleOCRProvider,
+    PaddleOCRUnavailable,
+    get_paddle_device_diagnostics,
+)
 import app.ocr.paddle_provider as paddle_provider_module
 
 
@@ -83,6 +89,43 @@ def test_missing_paddleocr_returns_failed_standard_result(monkeypatch) -> None:
     )
 
 
+def test_paddle_device_diagnostics_returns_safe_mapping(monkeypatch) -> None:
+    fake_paddle = types.SimpleNamespace(
+        device=types.SimpleNamespace(
+            is_compiled_with_cuda=lambda: True,
+            get_device=lambda: "gpu:0",
+        )
+    )
+    monkeypatch.setitem(sys.modules, "paddle", fake_paddle)
+
+    diagnostics = get_paddle_device_diagnostics()
+
+    assert diagnostics == {
+        "device": "gpu:0",
+        "cuda_compiled": True,
+        "diagnostic_code": None,
+    }
+
+
+def test_paddle_device_diagnostics_handles_runtime_errors(monkeypatch) -> None:
+    class BrokenDevice:
+        @staticmethod
+        def is_compiled_with_cuda() -> bool:
+            raise RuntimeError("hidden runtime detail")
+
+        @staticmethod
+        def get_device() -> str:
+            raise RuntimeError("hidden runtime detail")
+
+    monkeypatch.setitem(sys.modules, "paddle", types.SimpleNamespace(device=BrokenDevice()))
+
+    diagnostics = get_paddle_device_diagnostics()
+
+    assert diagnostics["device"] == "unknown"
+    assert diagnostics["cuda_compiled"] is None
+    assert diagnostics["diagnostic_code"] == "paddle_device_diagnostic_failed"
+
+
 def test_pdf_input_returns_unsupported_without_loading_paddleocr(monkeypatch) -> None:
     def fail_if_loaded() -> object:
         raise AssertionError("paddleocr loader should not be called for PDF input")
@@ -118,9 +161,9 @@ def test_fake_paddleocr_success_returns_standard_result(tmp_path) -> None:
         def __init__(self, **kwargs: object) -> None:
             self.kwargs = kwargs
 
-        def ocr(self, path: str, cls: bool = True) -> list:
+        def ocr(self, path: str, cls: bool = False) -> list:
             assert path.endswith("receipt.png")
-            assert cls is True
+            assert cls is False
             return [
                 [
                     [
@@ -140,7 +183,7 @@ def test_fake_paddleocr_success_returns_standard_result(tmp_path) -> None:
         source_file_name="fake_receipt.png",
     )
 
-    assert result.provider_fields["has_angle_classifier"] is True
+    assert result.provider_fields["has_angle_classifier"] is False
     assert result.provider == "paddleocr"
     assert result.provider_version == "optional"
     assert result.engine_runtime == "pc_local"
@@ -151,7 +194,129 @@ def test_fake_paddleocr_success_returns_standard_result(tmp_path) -> None:
     assert result.provider_fields["adapter_version"] == "paddle-standard-adapter-v1"
     assert result.provider_fields["provider_family"] == "paddleocr"
     assert result.provider_fields["input_type"] == "image"
+    assert result.provider_fields["provider"] == "paddle"
+    assert result.provider_fields["device"] == "unknown"
+    assert result.provider_fields["cuda_compiled"] is None
+    assert result.provider_fields["image_extension"] == ".png"
+    assert result.provider_fields["status"] == "completed"
+    assert result.provider_fields["diagnostic_code"] == "completed"
+    for key in ("init_elapsed_ms", "ocr_elapsed_ms", "total_elapsed_ms"):
+        assert isinstance(result.provider_fields[key], int)
+        assert result.provider_fields[key] >= 0
     assert_no_forbidden_output(result)
+
+
+def test_orientation_fallback_is_limited_to_results_without_core_candidates() -> None:
+    assert paddle_provider_module._should_try_orientation_fallback({"key_value_candidates": []})
+    assert paddle_provider_module._should_try_orientation_fallback({"key_value_candidates": [{"candidate_type": "approval_number"}]})
+    assert not paddle_provider_module._should_try_orientation_fallback(
+        {"key_value_candidates": [{"candidate_type": "transaction_date"}]}
+    )
+    assert not paddle_provider_module._should_try_orientation_fallback(
+        {"key_value_candidates": [{"candidate_type": "total_amount"}]}
+    )
+
+
+def test_quality_score_prefers_core_candidates_over_line_count_only() -> None:
+    noisy_many_lines = {
+        "lines": [{"text": f"noise-{index}"} for index in range(120)],
+        "key_value_candidates": [{"candidate_type": "approval_number"}],
+    }
+    core_candidate = {
+        "lines": [{"text": "merchant"}, {"text": "date"}],
+        "key_value_candidates": [
+            {"candidate_type": "merchant_name"},
+            {"candidate_type": "transaction_date"},
+            {"candidate_type": "business_number"},
+        ],
+    }
+
+    assert paddle_provider_module._quality_score(core_candidate) > paddle_provider_module._quality_score(noisy_many_lines)
+
+
+def test_merge_missing_candidate_hints_preserves_existing_values() -> None:
+    primary = {
+        "key_value_candidates": [
+            {
+                "candidate_type": "total_amount",
+                "key": "total_amount",
+                "value": "10000",
+                "normalized_value": "10000",
+            }
+        ]
+    }
+    supplemental = {
+        "key_value_candidates": [
+            {
+                "candidate_type": "total_amount",
+                "key": "total_amount",
+                "value": "15000",
+                "normalized_value": "15000",
+            },
+            {
+                "candidate_type": "business_number",
+                "key": "business_number",
+                "value": "205-39-03897",
+                "normalized_value": "205-39-03897",
+            },
+        ]
+    }
+
+    merged = paddle_provider_module._merge_missing_candidate_hints(
+        primary,
+        supplemental,
+        allowed_types={"total_amount", "business_number"},
+    )
+
+    values = {
+        candidate["candidate_type"]: candidate["normalized_value"]
+        for candidate in merged["key_value_candidates"]
+    }
+    assert values["total_amount"] == "10000"
+    assert values["business_number"] == "205-39-03897"
+
+
+def test_real_paddle_factory_is_cached_across_provider_instances(monkeypatch, tmp_path) -> None:
+    paddle_provider_module._clear_paddle_ocr_cache_for_tests()
+    image_path = tmp_path / "receipt.png"
+    image_path.write_bytes(b"fake image bytes")
+    init_calls = 0
+
+    class FakePaddleOCR:
+        def __init__(self, **kwargs: object) -> None:
+            nonlocal init_calls
+            init_calls += 1
+
+        def ocr(self, path: str, cls: bool = False) -> dict:
+            return {
+                "rec_texts": ["SAMPLE CAFE"],
+                "rec_scores": [0.98],
+                "dt_polys": [[[10, 10], [220, 10], [220, 42], [10, 42]]],
+            }
+
+    monkeypatch.setattr(paddle_provider_module, "_load_paddle_ocr_class", lambda: FakePaddleOCR)
+    monkeypatch.setattr(
+        paddle_provider_module,
+        "get_paddle_device_diagnostics",
+        lambda: {"device": "cpu", "cuda_compiled": False, "diagnostic_code": None},
+    )
+    monkeypatch.setattr(
+        paddle_provider_module.importlib.util,
+        "find_spec",
+        lambda name: object() if name == "paddle" else object(),
+    )
+
+    first_result = PaddleOCRProvider().extract(image_path, source_file_name="receipt.png")
+    second_result = PaddleOCRProvider().extract(image_path, source_file_name="receipt.png")
+
+    assert init_calls == 1
+    assert first_result.status == "completed"
+    assert second_result.status == "completed"
+    assert first_result.provider_fields["device"] == "cpu"
+    assert second_result.provider_fields["device"] == "cpu"
+    assert_no_forbidden_output(first_result)
+    assert_no_forbidden_output(second_result)
+    paddle_provider_module._clear_paddle_ocr_cache_for_tests()
 
 
 def test_paddle_provider_reuses_ocr_instance_for_multiple_images(tmp_path) -> None:
@@ -463,7 +628,7 @@ def test_paddle_provider_disables_sdk_console_logging(tmp_path) -> None:
                 ]
             ]
 
-    result = PaddleOCRProvider(ocr_factory=FakePaddleOCR).extract(image_path)
+    result = PaddleOCRProvider(ocr_factory=FakePaddleOCR, use_angle_cls=True).extract(image_path)
 
     assert init_kwargs["show_log"] is False
     assert result.status == "completed"
@@ -488,7 +653,7 @@ def test_not_implemented_orientation_error_retries_without_textline_orientation(
                 "dt_polys": [[[10, 10], [200, 10], [200, 40], [10, 40]]],
             }
 
-    result = PaddleOCRProvider(ocr_factory=FakePaddleOCR).extract(image_path)
+    result = PaddleOCRProvider(ocr_factory=FakePaddleOCR, use_angle_cls=True).extract(image_path)
 
     assert calls == [True, False]
     assert result.status == "completed"
@@ -551,6 +716,30 @@ def test_missing_paddle_runtime_returns_safe_diagnostic(monkeypatch, tmp_path) -
 
     assert result.status == "failed"
     assert result.diagnostic_code == "paddle_runtime_missing"
+    assert_no_forbidden_output(result)
+
+
+def test_gpu_request_without_cuda_returns_safe_diagnostic(monkeypatch, tmp_path) -> None:
+    image_path = tmp_path / "receipt.png"
+    image_path.write_bytes(b"fake image bytes")
+
+    def fail_if_loaded() -> object:
+        raise AssertionError("PaddleOCR should not be initialized when CUDA is unavailable")
+
+    monkeypatch.setattr(paddle_provider_module, "_load_paddle_ocr_class", fail_if_loaded)
+    monkeypatch.setattr(
+        paddle_provider_module,
+        "get_paddle_device_diagnostics",
+        lambda: {"device": "cpu", "cuda_compiled": False, "diagnostic_code": None},
+    )
+
+    result = PaddleOCRProvider(use_gpu=True).extract(image_path, source_file_name="receipt.png")
+
+    assert result.status == "failed"
+    assert result.diagnostic_code == "paddle_cuda_not_available"
+    assert result.provider_fields["device"] == "cpu"
+    assert result.provider_fields["cuda_compiled"] is False
+    assert result.provider_fields["diagnostic_code"] == "paddle_cuda_not_available"
     assert_no_forbidden_output(result)
 
 

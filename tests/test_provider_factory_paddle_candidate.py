@@ -12,12 +12,34 @@ def test_provider_factory_creates_paddle_provider_candidate() -> None:
 
     assert isinstance(provider, PaddleOCRProvider)
     assert provider.provider_name == "paddleocr"
+    assert provider.lang == "korean"
+    assert provider.use_angle_cls is False
+    assert provider.use_gpu is False
+    assert provider.show_log is False
 
 
 def test_provider_factory_accepts_paddleocr_alias() -> None:
     provider = get_ocr_provider(AppConfig(ocr_provider="paddleocr"))
 
     assert isinstance(provider, PaddleOCRProvider)
+
+
+def test_provider_factory_passes_paddle_runtime_options() -> None:
+    provider = get_ocr_provider(
+        AppConfig(
+            ocr_provider="paddle",
+            paddle_use_gpu=True,
+            paddle_use_angle_cls=True,
+            paddle_lang="en",
+            paddle_show_log=True,
+        )
+    )
+
+    assert isinstance(provider, PaddleOCRProvider)
+    assert provider.use_gpu is True
+    assert provider.use_angle_cls is True
+    assert provider.lang == "en"
+    assert provider.show_log is True
 
 
 def test_provider_factory_default_still_returns_mock(monkeypatch, tmp_path) -> None:
@@ -57,6 +79,39 @@ def test_provider_factory_env_paddle_candidate_does_not_require_paddleocr(
     provider = get_ocr_provider(get_config())
 
     assert isinstance(provider, PaddleOCRProvider)
+
+
+def test_get_config_uses_safe_paddle_defaults(monkeypatch, tmp_path) -> None:
+    monkeypatch.chdir(tmp_path)
+    for name in [
+        "PADDLE_USE_GPU",
+        "PADDLE_USE_ANGLE_CLS",
+        "PADDLE_LANG",
+        "PADDLE_SHOW_LOG",
+    ]:
+        monkeypatch.delenv(name, raising=False)
+
+    config = get_config()
+
+    assert config.paddle_use_gpu is False
+    assert config.paddle_use_angle_cls is False
+    assert config.paddle_lang == "korean"
+    assert config.paddle_show_log is False
+
+
+def test_get_config_reads_paddle_environment_options(monkeypatch, tmp_path) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PADDLE_USE_GPU", "true")
+    monkeypatch.setenv("PADDLE_USE_ANGLE_CLS", "true")
+    monkeypatch.setenv("PADDLE_LANG", "en")
+    monkeypatch.setenv("PADDLE_SHOW_LOG", "true")
+
+    config = get_config()
+
+    assert config.paddle_use_gpu is True
+    assert config.paddle_use_angle_cls is True
+    assert config.paddle_lang == "en"
+    assert config.paddle_show_log is True
 
 
 def test_provider_factory_tests_do_not_add_paddleocr_dependency() -> None:

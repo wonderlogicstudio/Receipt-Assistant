@@ -3,13 +3,15 @@ from __future__ import annotations
 from datetime import datetime
 from functools import lru_cache
 from hashlib import sha256
+import importlib
 import importlib.util
 import re
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from time import perf_counter
 from typing import Any, Callable, Mapping
 
-from app.classifier.merchant_dictionary import find_merchant_by_business_number
+from app.classifier.merchant_dictionary import find_merchant_by_business_number, find_merchant_by_name_fragment
 from app.core.standard_ocr import StandardOCRResult
 from app.ocr.adapters.paddle_standard_adapter import PaddleStandardOCRAdapter
 from app.ocr.base import OCRInput, OCRProvider
@@ -21,6 +23,9 @@ class PaddleOCRUnavailable(RuntimeError):
     def __init__(self, diagnostic_code: str = "paddle_not_installed") -> None:
         super().__init__(diagnostic_code)
         self.diagnostic_code = diagnostic_code
+
+
+_GLOBAL_OCR_INSTANCES: dict[tuple[str, bool, bool, bool], Any] = {}
 
 
 class PaddleOCRProvider(OCRProvider):
@@ -41,14 +46,16 @@ class PaddleOCRProvider(OCRProvider):
         self,
         *,
         lang: str = "korean",
-        use_angle_cls: bool = True,
+        use_angle_cls: bool = False,
         use_gpu: bool = False,
+        show_log: bool = False,
         adapter: PaddleStandardOCRAdapter | None = None,
         ocr_factory: Callable[..., Any] | None = None,
     ) -> None:
         self.lang = lang
         self.use_angle_cls = use_angle_cls
         self.use_gpu = use_gpu
+        self.show_log = show_log
         self.adapter = adapter or PaddleStandardOCRAdapter()
         self._ocr_factory = ocr_factory
         self._ocr_instances: dict[bool, Any] = {}
@@ -60,33 +67,121 @@ class PaddleOCRProvider(OCRProvider):
         source_file_id: str | None = None,
         source_file_name: str | None = None,
     ) -> StandardOCRResult:
+        total_started_at = perf_counter()
+        init_elapsed_ms = 0
+        ocr_elapsed_ms = 0
+        device_diagnostics: dict[str, Any] = _unknown_paddle_device_diagnostics()
         source_info = self._source_info(source, source_file_id, source_file_name)
         suffix = str(source_info["file_extension"])
 
         if suffix in self.skipped_extensions:
-            return self._diagnostic_result(source_info, "skipped", "paddle_not_ocr_target")
+            return self._diagnostic_result(
+                source_info,
+                "skipped",
+                "paddle_not_ocr_target",
+                runtime_metadata=_runtime_metadata(
+                    device_diagnostics=device_diagnostics,
+                    image_extension=suffix,
+                    init_elapsed_ms=init_elapsed_ms,
+                    ocr_elapsed_ms=ocr_elapsed_ms,
+                    total_elapsed_ms=_elapsed_ms(total_started_at),
+                    status="skipped",
+                    diagnostic_code="paddle_not_ocr_target",
+                ),
+            )
         if suffix in self.pdf_extensions:
-            return self._diagnostic_result(source_info, "failed", "paddle_pdf_not_supported")
+            return self._diagnostic_result(
+                source_info,
+                "failed",
+                "paddle_pdf_not_supported",
+                runtime_metadata=_runtime_metadata(
+                    device_diagnostics=device_diagnostics,
+                    image_extension=suffix,
+                    init_elapsed_ms=init_elapsed_ms,
+                    ocr_elapsed_ms=ocr_elapsed_ms,
+                    total_elapsed_ms=_elapsed_ms(total_started_at),
+                    status="failed",
+                    diagnostic_code="paddle_pdf_not_supported",
+                ),
+            )
         if suffix not in self.ocr_extensions:
-            return self._diagnostic_result(source_info, "failed", "unsupported_input_type")
+            return self._diagnostic_result(
+                source_info,
+                "failed",
+                "unsupported_input_type",
+                runtime_metadata=_runtime_metadata(
+                    device_diagnostics=device_diagnostics,
+                    image_extension=suffix,
+                    init_elapsed_ms=init_elapsed_ms,
+                    ocr_elapsed_ms=ocr_elapsed_ms,
+                    total_elapsed_ms=_elapsed_ms(total_started_at),
+                    status="failed",
+                    diagnostic_code="unsupported_input_type",
+                ),
+            )
 
         try:
-            ocr = self._build_ocr(use_textline_orientation=self.use_angle_cls)
+            if self._ocr_factory is None:
+                device_diagnostics = get_paddle_device_diagnostics()
+            init_started_at = perf_counter()
+            ocr = self._build_ocr(
+                use_textline_orientation=self.use_angle_cls,
+                device_diagnostics=device_diagnostics,
+            )
+            init_elapsed_ms = _elapsed_ms(init_started_at)
         except PaddleOCRUnavailable as exc:
-            return self._diagnostic_result(source_info, "failed", exc.diagnostic_code)
+            init_elapsed_ms = init_elapsed_ms or _elapsed_ms(total_started_at)
+            return self._diagnostic_result(
+                source_info,
+                "failed",
+                exc.diagnostic_code,
+                runtime_metadata=_runtime_metadata(
+                    device_diagnostics=device_diagnostics,
+                    image_extension=suffix,
+                    init_elapsed_ms=init_elapsed_ms,
+                    ocr_elapsed_ms=ocr_elapsed_ms,
+                    total_elapsed_ms=_elapsed_ms(total_started_at),
+                    status="failed",
+                    diagnostic_code=exc.diagnostic_code,
+                ),
+            )
         except Exception as exc:
+            init_elapsed_ms = init_elapsed_ms or _elapsed_ms(total_started_at)
             return self._diagnostic_result(
                 source_info,
                 "failed",
                 "paddle_runtime_error",
                 diagnostic_detail_code=_safe_exception_code(exc),
+                runtime_metadata=_runtime_metadata(
+                    device_diagnostics=device_diagnostics,
+                    image_extension=suffix,
+                    init_elapsed_ms=init_elapsed_ms,
+                    ocr_elapsed_ms=ocr_elapsed_ms,
+                    total_elapsed_ms=_elapsed_ms(total_started_at),
+                    status="failed",
+                    diagnostic_code="paddle_runtime_error",
+                ),
             )
 
         path = source_info.get("file_path")
         if not isinstance(path, Path) or not path.exists():
-            return self._diagnostic_result(source_info, "failed", "source_not_accessible")
+            return self._diagnostic_result(
+                source_info,
+                "failed",
+                "source_not_accessible",
+                runtime_metadata=_runtime_metadata(
+                    device_diagnostics=device_diagnostics,
+                    image_extension=suffix,
+                    init_elapsed_ms=init_elapsed_ms,
+                    ocr_elapsed_ms=ocr_elapsed_ms,
+                    total_elapsed_ms=_elapsed_ms(total_started_at),
+                    status="failed",
+                    diagnostic_code="source_not_accessible",
+                ),
+            )
 
         fallback_warning: str | None = None
+        ocr_started_at = perf_counter()
         try:
             raw_result = self._run_ocr(ocr, path, use_textline_orientation=self.use_angle_cls)
         except ValueError as exc:
@@ -98,31 +193,66 @@ class PaddleOCRProvider(OCRProvider):
                 )
                 fallback_warning = "paddle_image_normalization_fallback"
             except Exception as fallback_exc:
+                ocr_elapsed_ms = _elapsed_ms(ocr_started_at)
                 return self._diagnostic_result(
                     source_info,
                     "failed",
                     "paddle_runtime_error",
                     diagnostic_detail_code=_safe_exception_code(fallback_exc or exc),
+                    runtime_metadata=_runtime_metadata(
+                        device_diagnostics=device_diagnostics,
+                        image_extension=suffix,
+                        init_elapsed_ms=init_elapsed_ms,
+                        ocr_elapsed_ms=ocr_elapsed_ms,
+                        total_elapsed_ms=_elapsed_ms(total_started_at),
+                        status="failed",
+                        diagnostic_code="paddle_runtime_error",
+                    ),
                 )
         except Exception as exc:
             if self.use_angle_cls and isinstance(exc, NotImplementedError):
                 try:
-                    ocr = self._build_ocr(use_textline_orientation=False)
+                    fallback_init_started_at = perf_counter()
+                    ocr = self._build_ocr(
+                        use_textline_orientation=False,
+                        device_diagnostics=device_diagnostics,
+                    )
+                    init_elapsed_ms += _elapsed_ms(fallback_init_started_at)
                     raw_result = self._run_ocr(ocr, path, use_textline_orientation=False)
                     fallback_warning = "paddle_textline_orientation_fallback"
                 except Exception as fallback_exc:
+                    ocr_elapsed_ms = _elapsed_ms(ocr_started_at)
                     return self._diagnostic_result(
                         source_info,
                         "failed",
                         "paddle_runtime_error",
                         diagnostic_detail_code=_safe_exception_code(fallback_exc),
+                        runtime_metadata=_runtime_metadata(
+                            device_diagnostics=device_diagnostics,
+                            image_extension=suffix,
+                            init_elapsed_ms=init_elapsed_ms,
+                            ocr_elapsed_ms=ocr_elapsed_ms,
+                            total_elapsed_ms=_elapsed_ms(total_started_at),
+                            status="failed",
+                            diagnostic_code="paddle_runtime_error",
+                        ),
                     )
             else:
+                ocr_elapsed_ms = _elapsed_ms(ocr_started_at)
                 return self._diagnostic_result(
                     source_info,
                     "failed",
                     "paddle_runtime_error",
                     diagnostic_detail_code=_safe_exception_code(exc),
+                    runtime_metadata=_runtime_metadata(
+                        device_diagnostics=device_diagnostics,
+                        image_extension=suffix,
+                        init_elapsed_ms=init_elapsed_ms,
+                        ocr_elapsed_ms=ocr_elapsed_ms,
+                        total_elapsed_ms=_elapsed_ms(total_started_at),
+                        status="failed",
+                        diagnostic_code="paddle_runtime_error",
+                    ),
                 )
 
         sanitized_result = self._sanitize_result(raw_result)
@@ -140,9 +270,77 @@ class PaddleOCRProvider(OCRProvider):
             except Exception:
                 sanitized_result.setdefault("warnings", [])
                 sanitized_result["warnings"].append("paddle_image_quality_fallback_skipped")
+        if not fallback_warning and _should_try_orientation_fallback(sanitized_result):
+            try:
+                rotated_result = self._best_rotated_image_result(
+                    ocr,
+                    path,
+                    use_textline_orientation=self.use_angle_cls,
+                )
+                if rotated_result is not None and _quality_score(rotated_result) > _quality_score(sanitized_result):
+                    sanitized_result = rotated_result
+                    fallback_warning = "paddle_image_rotation_fallback"
+            except Exception:
+                sanitized_result.setdefault("warnings", [])
+                sanitized_result["warnings"].append("paddle_image_rotation_fallback_skipped")
+        supplemental_warnings: list[str] = []
+        if _can_try_supplemental_fallback(fallback_warning) and _should_try_supplemental_image_fallback(sanitized_result):
+            try:
+                enhanced_result = self._best_enhanced_image_result(
+                    ocr,
+                    path,
+                    use_textline_orientation=self.use_angle_cls,
+                )
+                if enhanced_result is not None:
+                    merged_result = _merge_missing_candidate_hints(
+                        sanitized_result,
+                        enhanced_result,
+                        allowed_types={"merchant_name", "business_number", "total_amount", "final_amount", "paid_amount"},
+                    )
+                    if _candidate_signature(merged_result) != _candidate_signature(sanitized_result):
+                        sanitized_result = merged_result
+                        supplemental_warnings.append("paddle_enhanced_image_candidate_fallback")
+            except Exception:
+                sanitized_result.setdefault("warnings", [])
+                sanitized_result["warnings"].append("paddle_enhanced_image_candidate_fallback_skipped")
+        if _can_try_supplemental_fallback(fallback_warning) and _should_try_supplemental_image_fallback(sanitized_result):
+            try:
+                detail_result = self._best_detail_crop_result(
+                    ocr,
+                    path,
+                    use_textline_orientation=self.use_angle_cls,
+                )
+                if detail_result is not None:
+                    merged_result = _merge_missing_candidate_hints(
+                        sanitized_result,
+                        detail_result,
+                        allowed_types={"merchant_name", "business_number"},
+                    )
+                    if _candidate_signature(merged_result) != _candidate_signature(sanitized_result):
+                        sanitized_result = merged_result
+                        supplemental_warnings.append("paddle_detail_crop_candidate_fallback")
+            except Exception:
+                sanitized_result.setdefault("warnings", [])
+                sanitized_result["warnings"].append("paddle_detail_crop_candidate_fallback_skipped")
+        ocr_elapsed_ms = _elapsed_ms(ocr_started_at)
         if fallback_warning:
             sanitized_result.setdefault("warnings", [])
             sanitized_result["warnings"].append(fallback_warning)
+        if supplemental_warnings:
+            sanitized_result.setdefault("warnings", [])
+            sanitized_result["warnings"].extend(supplemental_warnings)
+        _apply_runtime_metadata(
+            sanitized_result,
+            _runtime_metadata(
+                device_diagnostics=device_diagnostics,
+                image_extension=suffix,
+                init_elapsed_ms=init_elapsed_ms,
+                ocr_elapsed_ms=ocr_elapsed_ms,
+                total_elapsed_ms=_elapsed_ms(total_started_at),
+                status="completed" if sanitized_result.get("status") in {"succeeded", "success", "completed"} else str(sanitized_result.get("status") or "failed"),
+                diagnostic_code=_string_or_completed(sanitized_result.get("diagnostic_code")),
+            ),
+        )
         return self.adapter.convert(
             sanitized_result,
             source_file_id=str(source_info["source_file_id"]),
@@ -150,22 +348,45 @@ class PaddleOCRProvider(OCRProvider):
             provider_version=sanitized_result.get("engine_version") or "optional",
         )
 
-    def _build_ocr(self, *, use_textline_orientation: bool) -> Any:
-        cached = self._ocr_instances.get(use_textline_orientation)
+    def _build_ocr(
+        self,
+        *,
+        use_textline_orientation: bool,
+        device_diagnostics: Mapping[str, Any] | None = None,
+    ) -> Any:
+        factory = self._ocr_factory
+        if factory is not None:
+            cached = self._ocr_instances.get(use_textline_orientation)
+            if cached is not None:
+                return cached
+            return self._build_with_factory(factory, use_textline_orientation=use_textline_orientation)
+
+        cache_key = _ocr_cache_key(
+            lang=self.lang,
+            use_textline_orientation=use_textline_orientation,
+            use_gpu=self.use_gpu,
+            show_log=self.show_log,
+        )
+        cached = _GLOBAL_OCR_INSTANCES.get(cache_key)
         if cached is not None:
             return cached
 
-        factory = self._ocr_factory
-        if factory is None:
-            factory = _load_paddle_ocr_class()
-            if importlib.util.find_spec("paddle") is None:
-                raise PaddleOCRUnavailable("paddle_runtime_missing")
+        if self.use_gpu and (device_diagnostics or {}).get("cuda_compiled") is False:
+            raise PaddleOCRUnavailable("paddle_cuda_not_available")
+        factory = _load_paddle_ocr_class()
+        if importlib.util.find_spec("paddle") is None:
+            raise PaddleOCRUnavailable("paddle_runtime_missing")
+        ocr = self._build_with_factory(factory, use_textline_orientation=use_textline_orientation)
+        _GLOBAL_OCR_INSTANCES[cache_key] = ocr
+        return ocr
+
+    def _build_with_factory(self, factory: Callable[..., Any], *, use_textline_orientation: bool) -> Any:
         try:
             ocr = factory(
                 lang=self.lang,
                 use_angle_cls=use_textline_orientation,
                 use_gpu=self.use_gpu,
-                show_log=False,
+                show_log=self.show_log,
             )
         except TypeError:
             ocr = factory(**self._modern_factory_kwargs(use_textline_orientation=use_textline_orientation))
@@ -231,13 +452,121 @@ class PaddleOCRProvider(OCRProvider):
                 use_textline_orientation=use_textline_orientation,
             )
 
+    def _best_rotated_image_result(
+        self,
+        ocr: Any,
+        path: Path,
+        *,
+        use_textline_orientation: bool,
+    ) -> dict[str, Any] | None:
+        from PIL import Image, ImageOps
+
+        best_result: dict[str, Any] | None = None
+        best_score = -1
+        with TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            with Image.open(path) as image:
+                normalized = ImageOps.exif_transpose(image).convert("RGB")
+                for angle in (90, 180, 270):
+                    rotated_path = temp_path / f"paddle_rotated_{angle}.jpg"
+                    normalized.rotate(angle, expand=True).save(rotated_path, format="JPEG")
+                    raw_result = self._run_ocr(
+                        ocr,
+                        rotated_path,
+                        use_textline_orientation=use_textline_orientation,
+                    )
+                    sanitized = self._sanitize_result(raw_result)
+                    score = _quality_score(sanitized)
+                    if score > best_score:
+                        best_score = score
+                        best_result = sanitized
+        return best_result
+
+    def _best_enhanced_image_result(
+        self,
+        ocr: Any,
+        path: Path,
+        *,
+        use_textline_orientation: bool,
+    ) -> dict[str, Any] | None:
+        from PIL import Image, ImageEnhance, ImageOps
+
+        best_result: dict[str, Any] | None = None
+        best_score = -1
+        with TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            with Image.open(path) as image:
+                normalized = ImageOps.exif_transpose(image).convert("RGB")
+                for angle in (0, 90, 180, 270):
+                    rotated = normalized.rotate(angle, expand=True) if angle else normalized
+                    enhanced = ImageEnhance.Contrast(ImageOps.grayscale(rotated)).enhance(1.8).convert("RGB")
+                    enhanced_path = temp_path / f"paddle_enhanced_{angle}.jpg"
+                    enhanced.save(enhanced_path, format="JPEG")
+                    raw_result = self._run_ocr(
+                        ocr,
+                        enhanced_path,
+                        use_textline_orientation=use_textline_orientation,
+                    )
+                    sanitized = self._sanitize_result(raw_result)
+                    score = _quality_score(sanitized)
+                    if score > best_score:
+                        best_score = score
+                        best_result = sanitized
+        return best_result
+
+    def _best_detail_crop_result(
+        self,
+        ocr: Any,
+        path: Path,
+        *,
+        use_textline_orientation: bool,
+    ) -> dict[str, Any] | None:
+        from PIL import Image, ImageEnhance, ImageOps
+
+        best_result: dict[str, Any] | None = None
+        best_score = -1
+        crop_specs = (
+            (0.12, 0.22, 0.72, 0.34),
+            (0.10, 0.20, 0.80, 0.40),
+        )
+        with TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            with Image.open(path) as image:
+                normalized = ImageOps.exif_transpose(image).convert("RGB")
+                for angle in (90, 270):
+                    rotated = normalized.rotate(angle, expand=True)
+                    width, height = rotated.size
+                    for crop_index, (left, top, right, bottom) in enumerate(crop_specs):
+                        box = (
+                            int(width * left),
+                            int(height * top),
+                            int(width * right),
+                            int(height * bottom),
+                        )
+                        crop = rotated.crop(box)
+                        crop = crop.resize((max(crop.width * 3, 1), max(crop.height * 3, 1)))
+                        crop = ImageEnhance.Contrast(crop).enhance(1.6)
+                        crop_path = temp_path / f"paddle_detail_{angle}_{crop_index}.jpg"
+                        crop.save(crop_path, format="JPEG")
+                        raw_result = self._run_ocr(
+                            ocr,
+                            crop_path,
+                            use_textline_orientation=use_textline_orientation,
+                        )
+                        sanitized = self._sanitize_result(raw_result)
+                        score = _quality_score(sanitized)
+                        if score > best_score:
+                            best_score = score
+                            best_result = sanitized
+        return best_result
+
     def _modern_factory_kwargs(self, *, use_textline_orientation: bool) -> dict[str, Any]:
         return {
             "lang": self.lang,
             "use_doc_orientation_classify": False,
             "use_doc_unwarping": False,
             "use_textline_orientation": use_textline_orientation,
-            "show_log": False,
+            "show_log": self.show_log,
         }
 
     def _sanitize_result(self, raw_result: Any) -> dict[str, Any]:
@@ -284,6 +613,7 @@ class PaddleOCRProvider(OCRProvider):
         diagnostic_code: str,
         *,
         diagnostic_detail_code: str | None = None,
+        runtime_metadata: Mapping[str, Any] | None = None,
     ) -> StandardOCRResult:
         warnings = [diagnostic_code]
         if diagnostic_detail_code:
@@ -304,6 +634,8 @@ class PaddleOCRProvider(OCRProvider):
             "diagnostic_detail_code": diagnostic_detail_code,
             "warnings": warnings,
         }
+        if runtime_metadata:
+            _apply_runtime_metadata(payload, runtime_metadata)
         return self.adapter.convert(
             payload,
             source_file_id=str(source_info["source_file_id"]),
@@ -342,6 +674,148 @@ class PaddleOCRProvider(OCRProvider):
             return "ko"
         return self.lang
 
+
+def get_paddle_device_diagnostics() -> dict[str, Any]:
+    """Return non-sensitive Paddle runtime device diagnostics."""
+
+    try:
+        paddle = importlib.import_module("paddle")
+        cuda_compiled = bool(paddle.device.is_compiled_with_cuda())
+        device = _safe_device_token(paddle.device.get_device())
+    except ImportError:
+        return {
+            "device": "unknown",
+            "cuda_compiled": None,
+            "diagnostic_code": "paddle_runtime_missing",
+        }
+    except Exception:
+        return {
+            "device": "unknown",
+            "cuda_compiled": None,
+            "diagnostic_code": "paddle_device_diagnostic_failed",
+        }
+    return {
+        "device": device,
+        "cuda_compiled": cuda_compiled,
+        "diagnostic_code": None,
+    }
+
+
+def _unknown_paddle_device_diagnostics() -> dict[str, Any]:
+    return {
+        "device": "unknown",
+        "cuda_compiled": None,
+        "diagnostic_code": None,
+    }
+
+
+def _runtime_metadata(
+    *,
+    device_diagnostics: Mapping[str, Any],
+    image_extension: str,
+    init_elapsed_ms: int,
+    ocr_elapsed_ms: int,
+    total_elapsed_ms: int,
+    status: str,
+    diagnostic_code: str,
+) -> dict[str, Any]:
+    return {
+        "provider": "paddle",
+        "device": _safe_device_token(device_diagnostics.get("device")),
+        "cuda_compiled": _optional_bool(device_diagnostics.get("cuda_compiled")),
+        "image_extension": _safe_extension(image_extension),
+        "init_elapsed_ms": _non_negative_int(init_elapsed_ms),
+        "ocr_elapsed_ms": _non_negative_int(ocr_elapsed_ms),
+        "total_elapsed_ms": _non_negative_int(total_elapsed_ms),
+        "runtime_status": _safe_runtime_status(status),
+        "runtime_diagnostic_code": _safe_diagnostic_code(diagnostic_code),
+    }
+
+
+def _apply_runtime_metadata(payload: dict[str, Any], metadata: Mapping[str, Any]) -> None:
+    for key in (
+        "provider",
+        "device",
+        "cuda_compiled",
+        "image_extension",
+        "init_elapsed_ms",
+        "ocr_elapsed_ms",
+        "total_elapsed_ms",
+        "runtime_status",
+        "runtime_diagnostic_code",
+    ):
+        if key in metadata:
+            payload[key] = metadata[key]
+
+
+def _elapsed_ms(started_at: float) -> int:
+    return _non_negative_int(round((perf_counter() - started_at) * 1000))
+
+
+def _ocr_cache_key(
+    *,
+    lang: str,
+    use_textline_orientation: bool,
+    use_gpu: bool,
+    show_log: bool,
+) -> tuple[str, bool, bool, bool]:
+    return (str(lang or "korean").strip().lower() or "korean", use_textline_orientation, use_gpu, show_log)
+
+
+def _safe_device_token(value: Any) -> str:
+    text = str(value or "unknown").strip().lower()
+    if not text:
+        return "unknown"
+    text = re.sub(r"[^a-z0-9:_-]", "_", text)
+    return text[:40] or "unknown"
+
+
+def _safe_extension(value: str) -> str:
+    text = str(value or "").strip().lower()
+    if not text.startswith("."):
+        text = f".{text}" if text else ""
+    if re.fullmatch(r"\.[a-z0-9]{1,8}", text):
+        return text
+    return "unknown"
+
+
+def _safe_runtime_status(value: str) -> str:
+    normalized = str(value or "").strip().lower()
+    if normalized in {"completed", "failed", "partial", "skipped"}:
+        return normalized
+    if normalized in {"succeeded", "success"}:
+        return "completed"
+    return "failed"
+
+
+def _safe_diagnostic_code(value: str) -> str:
+    text = str(value or "completed").strip().lower()
+    text = re.sub(r"[^a-z0-9_-]", "_", text)
+    return text[:80] or "completed"
+
+
+def _string_or_completed(value: Any) -> str:
+    return _safe_diagnostic_code(str(value)) if value else "completed"
+
+
+def _optional_bool(value: Any) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    return None
+
+
+def _non_negative_int(value: Any) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return max(number, 0)
+
+
+def _clear_paddle_ocr_cache_for_tests() -> None:
+    _GLOBAL_OCR_INSTANCES.clear()
+
+
 def _load_paddle_ocr_class() -> Any:
     try:
         from paddleocr import PaddleOCR
@@ -364,6 +838,87 @@ def _should_try_quality_normalization_fallback(payload: Mapping[str, Any]) -> bo
     line_count = len(lines) if isinstance(lines, list) else 0
     candidate_count = len(candidates) if isinstance(candidates, list) else 0
     return line_count < 60 or candidate_count < 3
+
+
+def _should_try_orientation_fallback(payload: Mapping[str, Any]) -> bool:
+    candidates = payload.get("key_value_candidates")
+    candidate_items = candidates if isinstance(candidates, list) else []
+    candidate_types = {
+        str(candidate.get("candidate_type") or candidate.get("key") or "")
+        for candidate in candidate_items
+        if isinstance(candidate, Mapping)
+    }
+    reliable_types = {
+        "merchant_name",
+        "transaction_date",
+        "business_number",
+        "total_amount",
+        "final_amount",
+        "paid_amount",
+        "payment_method",
+    }
+    return not bool(candidate_types & reliable_types)
+
+
+def _should_try_supplemental_image_fallback(payload: Mapping[str, Any]) -> bool:
+    candidates = payload.get("key_value_candidates")
+    candidate_items = candidates if isinstance(candidates, list) else []
+    candidate_types = {
+        str(candidate.get("candidate_type") or candidate.get("key") or "")
+        for candidate in candidate_items
+        if isinstance(candidate, Mapping)
+    }
+    has_amount = bool(candidate_types & {"total_amount", "final_amount", "paid_amount"})
+    has_merchant_anchor = bool(candidate_types & {"merchant_name", "business_number"})
+    return not (has_amount and has_merchant_anchor)
+
+
+def _can_try_supplemental_fallback(fallback_warning: str | None) -> bool:
+    return fallback_warning != "paddle_image_normalization_fallback"
+
+
+def _candidate_signature(payload: Mapping[str, Any]) -> tuple[tuple[str, str], ...]:
+    candidates = payload.get("key_value_candidates")
+    candidate_items = candidates if isinstance(candidates, list) else []
+    signature: list[tuple[str, str]] = []
+    for candidate in candidate_items:
+        if not isinstance(candidate, Mapping):
+            continue
+        candidate_type = str(candidate.get("candidate_type") or candidate.get("key") or "")
+        value = str(candidate.get("normalized_value") or candidate.get("value") or "")
+        if candidate_type and value:
+            signature.append((candidate_type, value))
+    return tuple(signature)
+
+
+def _merge_missing_candidate_hints(
+    primary: Mapping[str, Any],
+    supplemental: Mapping[str, Any],
+    *,
+    allowed_types: set[str],
+) -> dict[str, Any]:
+    merged = dict(primary)
+    primary_candidates = primary.get("key_value_candidates")
+    supplemental_candidates = supplemental.get("key_value_candidates")
+    merged_candidates = list(primary_candidates) if isinstance(primary_candidates, list) else []
+    existing_types = {
+        str(candidate.get("candidate_type") or candidate.get("key") or "")
+        for candidate in merged_candidates
+        if isinstance(candidate, Mapping)
+    }
+    for candidate in supplemental_candidates if isinstance(supplemental_candidates, list) else []:
+        if not isinstance(candidate, Mapping):
+            continue
+        candidate_type = str(candidate.get("candidate_type") or candidate.get("key") or "")
+        if candidate_type not in allowed_types or candidate_type in existing_types:
+            continue
+        value = str(candidate.get("normalized_value") or candidate.get("value") or "").strip()
+        if not value or value == "[REDACTED]":
+            continue
+        merged_candidates.append(dict(candidate))
+        existing_types.add(candidate_type)
+    merged["key_value_candidates"] = merged_candidates
+    return merged
 
 
 def _quality_score(payload: Mapping[str, Any]) -> int:
@@ -395,9 +950,9 @@ def _quality_score(payload: Mapping[str, Any]) -> int:
         "vat_amount",
     }
     return (
-        min(line_count, 120)
-        + len(candidate_types & core_types) * 25
-        + len(candidate_types & amount_types) * 10
+        min(line_count, 120) // 5
+        + len(candidate_types & core_types) * 100
+        + len(candidate_types & amount_types) * 25
     )
 
 
@@ -529,12 +1084,67 @@ DISCOUNT_LABELS = ("할인", "쿠폰", "차감", "discount")
 GROSS_LABELS = ("상품금액", "매출", "공급대가", "gross")
 PAYMENT_CARD_LABELS = ("카드", "신용", "체크", "card", "visa", "master", "일시불", "할부")
 PAYMENT_CASH_LABELS = ("현금", "cash")
+APPROVAL_NUMBER_LABELS = ("승인번호", "승인NO", "승인No", "승인 no", "approval_no", "approval number")
 MERCHANT_LABELS = (
     "\uc0c1\ud638",
     "\uc0c1\ud638\uba85",
     "\ub9e4\uc7a5\uba85",
     "\uac00\ub9f9\uc810\uba85",
+    "\uac00\ub9f9\uc810",
     "\uc810\ud3ec\uba85",
+    "\uc0c1\uc810\uba85",
+    "\uc0ac\uc5c5\uc7a5\uba85",
+    "\uc5c5\uccb4\uba85",
+    "\ub9e4\ucd9c\ucc98",
+)
+KOREAN_DATE_LABELS = (
+    "\ub0a0\uc9dc",
+    "\uc77c\uc2dc",
+    "\uac70\ub798\uc77c",
+    "\uac70\ub798\uc77c\uc2dc",
+    "\ub9e4\ucd9c\uc77c",
+    "\ub9e4\ucd9c\uc77c\uc2dc",
+    "\uc2b9\uc778\uc77c",
+    "\uc2b9\uc778\uc77c\uc2dc",
+    "\ubc1c\ud589\uc77c",
+    "\ubc1c\ud589\uc77c\uc2dc",
+    "\uacb0\uc81c\ub0a0\uc9dc",
+    "\uacb0\uc81c\ub0a0\uc9dc\ubc0f\uc2dc\uac04",
+)
+SIMPLE_TOTAL_AMOUNT_LABELS = (
+    "\uae08\uc561",
+    "\ucd1d\uc561",
+    "\ud569\uacc4\uae08\uc561",
+    "\uacb0\uc81c\uae08\uc561",
+    "\uc2b9\uc778\uae08\uc561",
+    "\uc774\uc6a9\uae08\uc561",
+)
+APP_SCREEN_MARKERS = (
+    "\uce74\ud14c\uace0\ub9ac",
+    "\ubbf8\uc9c0\uc815",
+    "\uacb0\uc81c\uc815\ubcf4",
+    "\uc601\uc218\uc99d",
+    "\uacb0\uc81c\ucde8\uc18c",
+)
+APP_SCREEN_MERCHANT_BLOCKERS = (
+    "\uc601\uc218\uc99d",
+    "\uacb0\uc81c",
+    "\ucde8\uc18c",
+    "\uc815\ubcf4",
+    "\ud3b8\uc9d1",
+    "\uc0ad\uc81c",
+    "\uce74\ud14c\uace0\ub9ac",
+    "\ubbf8\uc9c0\uc815",
+    "\ub0a0\uc9dc",
+    "\uc77c\uc2dc",
+    "\uce74\ub4dc",
+    "\uc774\ub984",
+    "\uc2b9\uc778",
+    "\ubc88\ud638",
+    "\uae08\uc561",
+    "\ucd1d\uc561",
+    "\uc624\uc804",
+    "\uc624\ud6c4",
 )
 TOP_MERCHANT_SUFFIX_MARKERS = (
     "주유소",
@@ -550,6 +1160,7 @@ TOP_MERCHANT_SUFFIX_MARKERS = (
     "식품",
     "호텔",
     "리조트",
+    "\uace0\uae43\uc9d1",
     "fresh",
 )
 
@@ -569,6 +1180,9 @@ def _candidate_hints_from_lines(lines: list[Mapping[str, Any]]) -> list[dict[str
     _append_labeled_tax_sum_sequence_candidates(candidates, seen_types, lines)
     _append_gas_split_tax_total_candidates(candidates, seen_types, lines)
     _append_card_receipt_zero_group_amount_candidates(candidates, seen_types, lines)
+    _append_card_receipt_split_tax_summary_candidates(candidates, seen_types, lines)
+    _append_split_total_label_amount_candidates(candidates, seen_types, lines)
+    _append_card_sales_total_adjacent_amount_candidate(candidates, seen_types, lines)
 
     for index, line in enumerate(lines):
         text = _safe_line_text(line)
@@ -579,6 +1193,9 @@ def _candidate_hints_from_lines(lines: list[Mapping[str, Any]]) -> list[dict[str
 
         date_text = (
             _joined_korean_date_fragment(lines, index)
+            or _labeled_compact_datetime_fragment(lines, index)
+            or _noisy_embedded_compact_datetime_fragment(lines, index)
+            or _labeled_flexible_short_date_fragment(lines, index)
             or _labeled_short_date_fragment(lines, index)
             or _joined_date_fragment(lines, index)
             or text
@@ -623,6 +1240,8 @@ def _candidate_hints_from_lines(lines: list[Mapping[str, Any]]) -> list[dict[str
         merchant_name = labeled_merchant_name
         if not merchant_name:
             merchant_name = _business_block_merchant_value(lines, index)
+        if not merchant_name:
+            merchant_name = _app_screen_merchant_value(lines, index)
         if merchant_name:
             _append_candidate(
                 candidates,
@@ -635,6 +1254,21 @@ def _candidate_hints_from_lines(lines: list[Mapping[str, Any]]) -> list[dict[str
             )
         if labeled_merchant_name:
             continue
+
+        if _is_app_navigation_label(lines, index):
+            continue
+
+        approval_number = _labeled_approval_number_value(lines, index)
+        if approval_number:
+            _append_candidate(
+                candidates,
+                seen_types,
+                candidate_type="approval_number",
+                key="approval_number",
+                value=approval_number,
+                source_block_id=source_block_id,
+                confidence=confidence,
+            )
 
         split_vat_amount = _split_vat_amount_between_fragments(lines, index)
         if split_vat_amount is not None:
@@ -678,10 +1312,15 @@ def _candidate_hints_from_lines(lines: list[Mapping[str, Any]]) -> list[dict[str
                 suppress_nearby_amount = True
             elif _has_any_label(amount_label_compact, VAT_LABELS):
                 amount = _previous_vat_amount_if_balanced(lines, index)
+            elif _has_simple_total_amount_label(amount_label_compact):
+                amount = _nearby_currency_split_amount(lines, index, max_lines=3)
+                if amount is None:
+                    amount = _nearby_split_amount_fragments(lines, index, max_lines=3)
             prefer_largest_nearby = (
                 _is_standalone_total_label(compact)
                 or _has_any_label(amount_label_compact, FINAL_LABELS)
                 or _has_any_label(amount_label_compact, TOTAL_LABELS)
+                or _has_simple_total_amount_label(amount_label_compact)
             )
             if amount is None and prefer_largest_nearby:
                 if _is_standalone_total_label(compact):
@@ -719,16 +1358,21 @@ def _candidate_hints_from_lines(lines: list[Mapping[str, Any]]) -> list[dict[str
         elif _has_paid_amount_label(amount_label_compact) or _has_inline_card_amount_label(compact):
             _append_amount_candidate(candidates, seen_types, "paid_amount", amount, source_block_id, confidence)
             _append_amount_candidate(candidates, seen_types, "total_amount", amount, source_block_id, confidence)
+        elif _has_simple_total_amount_label(amount_label_compact):
+            _append_amount_candidate(candidates, seen_types, "final_amount", amount, source_block_id, confidence)
+            _append_amount_candidate(candidates, seen_types, "total_amount", amount, source_block_id, confidence)
         elif _is_standalone_total_label(compact) or _has_any_label(amount_label_compact, FINAL_LABELS):
             _append_amount_candidate(candidates, seen_types, "final_amount", amount, source_block_id, confidence)
             _append_amount_candidate(candidates, seen_types, "total_amount", amount, source_block_id, confidence)
 
     _append_top_known_merchant_candidate(candidates, seen_types, lines)
+    _append_multiline_known_merchant_candidate(candidates, seen_types, lines)
     _append_top_card_slip_amount_candidates(candidates, seen_types, lines)
     _append_repeated_card_slip_amount_candidates(candidates, seen_types, lines)
     _append_sum_checked_total_amount_candidates(candidates, seen_types, lines)
     _append_card_receipt_won_amount_candidates(candidates, seen_types, lines)
     _append_card_receipt_tax_adjacent_amount_candidates(candidates, seen_types, lines)
+    _normalize_contextual_merchant_candidates(candidates, lines)
     return candidates
 
 
@@ -1217,6 +1861,77 @@ def _append_top_known_merchant_candidate(
         return
 
 
+def _append_multiline_known_merchant_candidate(
+    candidates: list[dict[str, Any]],
+    seen_types: set[str],
+    lines: list[Mapping[str, Any]],
+) -> None:
+    if "merchant_name" in seen_types:
+        return
+    for index in range(0, min(len(lines), 40)):
+        source_line = lines[index]
+        source_text = _safe_line_text(source_line)
+        if not source_text:
+            continue
+        parts: list[str] = []
+        for nearby_index in range(index, min(index + 4, len(lines))):
+            text = _safe_line_text(lines[nearby_index])
+            if not text:
+                continue
+            compact = _compact_line(text)
+            if (
+                DATE_CANDIDATE_PATTERN.search(text)
+                or BUSINESS_NUMBER_CANDIDATE_PATTERN.search(text)
+                or PHONE_LIKE_PATTERN.search(text)
+                or CARD_LIKE_PATTERN.search(text)
+                or _last_reasonable_amount(text) is not None
+                or _has_blocking_non_amount_label(compact)
+            ):
+                break
+            parts.append(text)
+            combined = " ".join(parts)
+            merchant_name = find_merchant_by_name_fragment(combined)
+            if not merchant_name:
+                continue
+            _append_candidate(
+                candidates,
+                seen_types,
+                candidate_type="merchant_name",
+                key="merchant_name",
+                value=merchant_name,
+                source_block_id=str(source_line.get("block_id") or ""),
+                confidence=_optional_float(source_line.get("confidence")),
+            )
+            return
+
+
+def _normalize_contextual_merchant_candidates(
+    candidates: list[dict[str, Any]],
+    lines: list[Mapping[str, Any]],
+) -> None:
+    merchant_candidate = next(
+        (candidate for candidate in candidates if candidate.get("candidate_type") == "merchant_name"),
+        None,
+    )
+    if not merchant_candidate:
+        return
+    merchant_value = str(merchant_candidate.get("normalized_value") or merchant_candidate.get("value") or "")
+    merchant_compact = _compact_line(merchant_value)
+    if merchant_compact != "프라자주유소":
+        return
+    nearby_known = next(
+        (
+            known
+            for known in (find_merchant_by_name_fragment(_safe_line_text(line)) for line in lines[:12])
+            if known
+        ),
+        None,
+    )
+    if nearby_known and "현대오일뱅크" in nearby_known:
+        merchant_candidate["value"] = nearby_known
+        merchant_candidate["normalized_value"] = nearby_known
+
+
 def _tax_summary_amount_sequence(lines: list[Mapping[str, Any]], start_index: int, *, max_lines: int) -> tuple[int, int, int] | None:
     fragments: list[str] = []
     for nearby_index in range(start_index, min(start_index + max_lines, len(lines))):
@@ -1391,6 +2106,134 @@ def _append_sum_checked_total_amount_candidates(
             source_block_id,
             confidence,
         )
+
+
+def _append_split_total_label_amount_candidates(
+    candidates: list[dict[str, Any]],
+    seen_types: set[str],
+    lines: list[Mapping[str, Any]],
+) -> None:
+    if {"total_amount", "final_amount"} & seen_types:
+        return
+    for index in range(0, min(len(lines) - 3, 120)):
+        text = _safe_line_text(lines[index])
+        next_text = _safe_line_text(lines[index + 1])
+        if not text or not next_text:
+            continue
+        compact = _compact_line(text).strip(":")
+        next_compact = _compact_line(next_text).strip(":")
+        if not (compact in {"\ud569\uacc4", "\ucd1d\uc561"} and next_compact in {"\uae08\uc561", "\uc561"}):
+            continue
+        amount = _nearby_split_amount_fragments(lines, index + 1, max_lines=3)
+        if amount is None:
+            amount = _nearby_labeled_amount(lines, index + 1, max_lines=3, prefer_largest=True)
+        if amount is None or amount < 1_000:
+            continue
+        source_block_id = str(lines[index].get("block_id") or "")
+        confidence = _optional_float(lines[index].get("confidence"))
+        _append_amount_candidate(candidates, seen_types, "final_amount", amount, source_block_id, confidence)
+        _append_amount_candidate(candidates, seen_types, "total_amount", amount, source_block_id, confidence)
+        return
+
+
+def _append_card_sales_total_adjacent_amount_candidate(
+    candidates: list[dict[str, Any]],
+    seen_types: set[str],
+    lines: list[Mapping[str, Any]],
+) -> None:
+    if {"total_amount", "final_amount", "paid_amount"} & seen_types:
+        return
+    if not _has_card_evidence(lines):
+        return
+    for index in range(0, min(len(lines), 120)):
+        text = _safe_line_text(lines[index])
+        if not text or not _is_standalone_amount_line(text):
+            continue
+        amount = _last_reasonable_amount(text)
+        if amount is None or amount < 1_000:
+            continue
+        if _looks_like_pos_identifier_amount(lines, index, amount):
+            continue
+        nearby_compact = _compact_line(
+            " ".join(_safe_line_text(lines[nearby_index]) or "" for nearby_index in range(index + 1, min(index + 4, len(lines))))
+        )
+        if not ("\ub9e4\ucd9c\ud569\uacc4" in nearby_compact and "\uce74\ub4dc" in nearby_compact):
+            continue
+        source_block_id = str(lines[index].get("block_id") or "")
+        confidence = _optional_float(lines[index].get("confidence"))
+        for candidate_type in ("paid_amount", "final_amount", "total_amount"):
+            _append_amount_candidate(candidates, seen_types, candidate_type, amount, source_block_id, confidence)
+        return
+
+
+def _append_card_receipt_split_tax_summary_candidates(
+    candidates: list[dict[str, Any]],
+    seen_types: set[str],
+    lines: list[Mapping[str, Any]],
+) -> None:
+    if {"total_amount", "final_amount", "paid_amount"} & seen_types:
+        return
+    if not _has_card_evidence(lines):
+        return
+    for index, line in enumerate(lines[:100]):
+        text = _safe_line_text(line) or ""
+        compact = _compact_line(text)
+        if "\uc6d0" not in compact:
+            continue
+        digits = re.sub(r"\D", "", text)
+        if not re.fullmatch(r"[1-9]\d{4,5}", digits):
+            continue
+        observed_amount = int(digits)
+        corrected_total = observed_amount * 10
+        if corrected_total < 100_000 or corrected_total > 1_000_000:
+            continue
+        split_amounts = _split_tax_amount_options_near_total(lines, index)
+        for supply_amount in split_amounts:
+            if supply_amount < 100_000 or supply_amount >= corrected_total:
+                continue
+            for vat_amount in split_amounts:
+                if vat_amount < 10_000 or vat_amount >= supply_amount:
+                    continue
+                if abs(round(supply_amount / 10) - vat_amount) > 2:
+                    continue
+                if abs((supply_amount + vat_amount) - corrected_total) > 2:
+                    continue
+                source_block_id = str(line.get("block_id") or "")
+                confidence = _optional_float(line.get("confidence"))
+                _append_amount_candidate(candidates, seen_types, "supply_amount", supply_amount, source_block_id, confidence)
+                _append_amount_candidate(candidates, seen_types, "vat_amount", vat_amount, source_block_id, confidence)
+                _append_amount_candidate(candidates, seen_types, "final_amount", corrected_total, source_block_id, confidence)
+                _append_amount_candidate(candidates, seen_types, "paid_amount", corrected_total, source_block_id, confidence)
+                _append_amount_candidate(candidates, seen_types, "total_amount", corrected_total, source_block_id, confidence)
+                return
+
+
+def _split_tax_amount_options_near_total(lines: list[Mapping[str, Any]], total_index: int) -> set[int]:
+    fragments: list[tuple[int, str]] = []
+    for nearby_index in range(max(total_index - 14, 0), total_index):
+        text = _safe_line_text(lines[nearby_index]) or ""
+        fragment = _tax_summary_fragment_digits(text)
+        if fragment is None:
+            continue
+        if not re.fullmatch(r"[1-9]\d{0,2}", fragment):
+            continue
+        fragments.append((nearby_index, fragment))
+
+    amounts: set[int] = set()
+    for left_offset, (left_index, left_fragment) in enumerate(fragments):
+        for right_index, right_fragment in fragments[left_offset + 1 :]:
+            if right_index - left_index > 4:
+                continue
+            if len(right_fragment) == 3:
+                amounts.add(int(f"{left_fragment}{right_fragment}"))
+            if len(left_fragment) == 3:
+                amounts.add(int(f"{right_fragment}{left_fragment}"))
+    return {amount for amount in amounts if 100 <= amount <= 1_000_000}
+
+
+def _tax_summary_fragment_digits(text: str) -> str | None:
+    stripped = re.sub(r"[\uc6d0\u20a9\s]", "", str(text or ""))
+    return _amount_fragment_digits(stripped, allow_zero_group=False)
 
 
 def _first_total_label_index(lines: list[Mapping[str, Any]]) -> int | None:
@@ -1709,12 +2552,70 @@ def _joined_korean_date_fragment(lines: list[Mapping[str, Any]], index: int) -> 
     return None
 
 
+def _labeled_flexible_short_date_fragment(lines: list[Mapping[str, Any]], index: int) -> str | None:
+    text = _safe_line_text(lines[index])
+    if not text:
+        return None
+    nearby_text = " ".join(
+        _safe_line_text(lines[nearby_index]) or ""
+        for nearby_index in range(max(index - 2, 0), min(index + 4, len(lines)))
+    )
+    nearby_compact = _compact_line(nearby_text)
+    if not _has_any_label(nearby_compact, KOREAN_DATE_LABELS):
+        return None
+    if any(token in nearby_compact for token in ("\uc2b9\uc778\ubc88\ud638", "\uce74\ub4dc\ubc88\ud638", "\uace0\uc720\ubc88\ud638")):
+        if not any(label in nearby_compact for label in ("\uc2b9\uc778\uc77c", "\uc2b9\uc778\uc77c\uc2dc", "\uac70\ub798\uc77c\uc2dc")):
+            return None
+    for nearby_index in range(index, min(index + 4, len(lines))):
+        candidate_text = _safe_line_text(lines[nearby_index])
+        if not candidate_text:
+            continue
+        digits = re.sub(r"\D", "", candidate_text)
+        if len(digits) >= 8 and digits[:2] in {"19", "20"} and _has_nearby_time_fragment(lines, nearby_index):
+            continue
+        candidate = _flexible_date_candidate_from_text(candidate_text)
+        if candidate:
+            return candidate
+    return None
+
+
+def _flexible_date_candidate_from_text(text: str) -> str | None:
+    value = str(text or "").strip()
+    if not value:
+        return None
+    separated_match = re.search(r"\b((?:19|20)\d{2})[.\-/]\s*(\d{1,2})[.\-/]\s*(\d{1,2})\b", value)
+    if separated_match:
+        candidate = f"{int(separated_match.group(1)):04d}-{int(separated_match.group(2)):02d}-{int(separated_match.group(3)):02d}"
+        return candidate if _is_valid_date_candidate(candidate) else None
+    digits = re.sub(r"\D", "", value)
+    if len(digits) >= 8 and digits[:2] in {"19", "20"}:
+        candidate = f"{digits[:4]}-{digits[4:6]}-{digits[6:8]}"
+        return candidate if _is_valid_date_candidate(candidate) else None
+    if len(digits) == 6 and digits.startswith("20"):
+        year = int(digits[:4])
+        month = int(digits[4])
+        day = int(digits[5])
+        candidate = f"{year:04d}-{month:02d}-{day:02d}"
+        return candidate if _is_valid_date_candidate(candidate) else None
+    return None
+
+
+def _has_nearby_time_fragment(lines: list[Mapping[str, Any]], index: int) -> bool:
+    for nearby_index in range(index + 1, min(index + 3, len(lines))):
+        text = _safe_line_text(lines[nearby_index]) or ""
+        if re.search(r"\b\d{1,2}:\d{2}(?::\d{2})?\b", text):
+            return True
+    return False
+
+
 def _labeled_short_date_fragment(lines: list[Mapping[str, Any]], index: int) -> str | None:
     text = _safe_line_text(lines[index])
     if not text:
         return None
     digits = re.sub(r"\D", "", text)
     if len(digits) < 6:
+        return None
+    if re.search(r"\b\d{2,4}[-./]\d{1,2}[-./]\d{1,2}", text):
         return None
     nearby_text = " ".join(
         _safe_line_text(lines[nearby_index]) or ""
@@ -1726,21 +2627,223 @@ def _labeled_short_date_fragment(lines: list[Mapping[str, Any]], index: int) -> 
         "발행일시",
         "거래일시",
         "거래일자",
+        "매출일",
+        "매출일자",
+        "판매일",
+        "판매일자",
         "판매시간",
         "인쇄일자",
         "등록",
     )
     if not any(label in nearby_compact for label in date_labels):
         return None
-    year = 2000 + int(digits[:2])
-    month = int(digits[2:4])
-    day = int(digits[4:6])
+    if len(digits) >= 8 and digits[:2] in {"19", "20"}:
+        year = int(digits[:4])
+        month = int(digits[4:6])
+        day = int(digits[6:8])
+    else:
+        year = 2000 + int(digits[:2])
+        month = int(digits[2:4])
+        day = int(digits[4:6])
     if not (2000 <= year <= 2099 and 1 <= month <= 12 and 1 <= day <= 31):
         return None
     candidate = f"{year}-{month:02d}-{day:02d}"
     if not _is_valid_date_candidate(candidate):
         return None
     return candidate
+
+
+def _labeled_compact_datetime_fragment(lines: list[Mapping[str, Any]], index: int) -> str | None:
+    text = _safe_line_text(lines[index])
+    if not text:
+        return None
+    nearby_text = " ".join(
+        _safe_line_text(lines[nearby_index]) or ""
+        for nearby_index in range(max(index - 2, 0), min(index + 3, len(lines)))
+    )
+    nearby_compact = _compact_line(nearby_text)
+    datetime_labels = (
+        "승인일시",
+        "승인시간",
+        "거래일시",
+        "거래일자",
+        "매출일",
+        "매출일자",
+        "판매시간",
+    )
+    if not any(label in nearby_compact for label in datetime_labels):
+        return None
+    if any(token in nearby_compact for token in ("승인번호", "카드번호", "고유번호")) and not any(
+        label in nearby_compact for label in ("승인일시", "승인시간", "거래일시", "거래일자")
+    ):
+        return None
+    joined_text = " ".join(
+        _safe_line_text(lines[nearby_index]) or ""
+        for nearby_index in range(index, min(index + 3, len(lines)))
+    )
+    match = re.search(r"\b((?:19|20)\d{6})\s+(\d{1,2}:\d{2}(?::\d{2})?)\b", joined_text)
+    if not match:
+        match = re.search(r"\b((?:19|20)\d{6})(\d{2})(\d{2})(\d{2})\b", joined_text)
+        if not match:
+            return None
+        hour = int(match.group(2))
+        minute = int(match.group(3))
+        second = int(match.group(4))
+        if not (0 <= hour <= 23 and 0 <= minute <= 59 and 0 <= second <= 59):
+            return None
+        candidate = f"{match.group(1)} {hour:02d}:{minute:02d}:{second:02d}"
+        if not _is_valid_date_candidate(candidate):
+            return None
+        return candidate
+    candidate = f"{match.group(1)} {match.group(2)}"
+    if not _is_valid_date_candidate(candidate):
+        return None
+    return candidate
+
+
+def _noisy_embedded_compact_datetime_fragment(lines: list[Mapping[str, Any]], index: int) -> str | None:
+    text = _safe_line_text(lines[index])
+    if not text:
+        return None
+    nearby_text = " ".join(
+        _safe_line_text(lines[nearby_index]) or ""
+        for nearby_index in range(max(index - 8, 0), min(index + 9, len(lines)))
+    )
+    nearby_compact = _compact_line(nearby_text)
+    has_datetime_context = any(
+        label in nearby_compact
+        for label in ("승인일시", "승인시간", "거래일시", "거래일자", "매출일", "매출일자")
+    ) or ("승" in nearby_compact and "인" in nearby_compact and ("시" in nearby_compact or "간" in nearby_compact))
+    if not has_datetime_context:
+        return None
+    if any(token in nearby_compact for token in ("승인번호", "카드번호", "고유번호")) and not any(
+        label in nearby_compact for label in ("승인일시", "승인시간", "거래일시", "거래일자")
+    ):
+        return None
+    digits = re.sub(r"\D", "", text)
+    if len(digits) < 12:
+        return None
+    for start in range(0, max(len(digits) - 14 + 1, 0)):
+        candidate = _compact_datetime_candidate_from_digits(digits[start : start + 14], full_year=True)
+        if candidate:
+            return candidate
+    for start in range(0, max(len(digits) - 12 + 1, 0)):
+        candidate = _compact_datetime_candidate_from_digits(digits[start : start + 12], full_year=False)
+        if candidate:
+            return candidate
+    return None
+
+
+def _compact_datetime_candidate_from_digits(digits: str, *, full_year: bool) -> str | None:
+    if full_year:
+        if not re.fullmatch(r"(?:19|20)\d{12}", digits):
+            return None
+        year = int(digits[:4])
+        month = int(digits[4:6])
+        day = int(digits[6:8])
+        hour = int(digits[8:10])
+        minute = int(digits[10:12])
+        second = int(digits[12:14])
+        date_part = digits[:8]
+    else:
+        if not re.fullmatch(r"\d{12}", digits):
+            return None
+        short_year = int(digits[:2])
+        if short_year < 20 or short_year > 39:
+            return None
+        year = 2000 + short_year
+        month = int(digits[2:4])
+        day = int(digits[4:6])
+        hour = int(digits[6:8])
+        minute = int(digits[8:10])
+        second = int(digits[10:12])
+        date_part = f"{year:04d}{month:02d}{day:02d}"
+    if not (2000 <= year <= 2099 and 1 <= month <= 12 and 1 <= day <= 31):
+        return None
+    if not (0 <= hour <= 23 and 0 <= minute <= 59 and 0 <= second <= 59):
+        return None
+    candidate = f"{date_part} {hour:02d}:{minute:02d}:{second:02d}"
+    if not _is_valid_date_candidate(candidate):
+        return None
+    return candidate
+
+
+def _labeled_approval_number_value(lines: list[Mapping[str, Any]], index: int) -> str | None:
+    text = _safe_line_text(lines[index])
+    if not text:
+        return None
+    compact = _compact_line(text).upper()
+    if not any(_compact_line(label).upper() in compact for label in APPROVAL_NUMBER_LABELS):
+        return None
+
+    same_line = _approval_number_candidate_after_label(text)
+    if same_line:
+        return same_line
+
+    for nearby_index in range(index + 1, min(index + 4, len(lines))):
+        candidate_text = _safe_line_text(lines[nearby_index])
+        if not candidate_text:
+            continue
+        candidate_compact = _compact_line(candidate_text).upper()
+        if any(_compact_line(label).upper() in candidate_compact for label in APPROVAL_NUMBER_LABELS):
+            continue
+        if _has_blocking_non_approval_number_label(candidate_compact):
+            return None
+        candidate = _approval_number_candidate_from_text(candidate_text)
+        if candidate:
+            return candidate
+    return None
+
+
+def _approval_number_candidate_after_label(text: str) -> str | None:
+    match = re.search(
+        r"(?:승인\s*(?:번호|NO|No|no)|approval\s*(?:no|number)|approval_no)\s*[:：#\-]?\s*(.+?)\s*$",
+        str(text or ""),
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return None
+    return _approval_number_candidate_from_text(match.group(1))
+
+
+def _approval_number_candidate_from_text(text: str) -> str | None:
+    value = str(text or "").strip()
+    if not value or value == "[REDACTED]":
+        return None
+    if BUSINESS_NUMBER_CANDIDATE_PATTERN.search(value) or PHONE_LIKE_PATTERN.search(value) or CARD_LIKE_PATTERN.search(value):
+        return None
+    compact = _compact_line(value)
+    if any(token in compact for token in ("카드번호", "사업자", "전화", "TEL", "합계", "총금액", "공급", "부가", "세액")):
+        return None
+    digits = re.sub(r"\D", "", value)
+    if not (6 <= len(digits) <= 15):
+        return None
+    if set(digits) == {"0"}:
+        return None
+    return digits
+
+
+def _has_blocking_non_approval_number_label(compact: str) -> bool:
+    blocking_labels = (
+        "승인일시",
+        "승인시간",
+        "거래일시",
+        "거래일자",
+        "매출일",
+        "매출일자",
+        "카드번호",
+        "사업자",
+        "대표",
+        "주소",
+        "TEL",
+        "전화",
+        "합계",
+        "총금액",
+        "공급",
+        "부가",
+        "세액",
+    )
+    return any(label in compact for label in blocking_labels)
 
 
 def _joined_business_number_fragment(lines: list[Mapping[str, Any]], index: int) -> str | None:
@@ -1918,7 +3021,8 @@ def _labeled_business_number_prefix_fragment(lines: list[Mapping[str, Any]], ind
 
 def _labeled_merchant_value(text: str) -> str | None:
     for label in sorted(MERCHANT_LABELS, key=len, reverse=True):
-        match = re.match(rf"\s*{re.escape(label)}\s*[:\-\u2013\u2014]?\s*(.+?)\s*$", text)
+        flexible_label = r"\s*".join(re.escape(char) for char in label)
+        match = re.match(rf"\s*{flexible_label}\s*[:\-\u2013\u2014]?\s*(.+?)\s*$", text)
         if not match:
             continue
         value = str(match.group(1) or "").strip()
@@ -1933,9 +3037,11 @@ def _labeled_merchant_value(text: str) -> str | None:
             return None
         if _last_reasonable_amount(value) is not None:
             return None
+        if _is_labeled_merchant_noise_value(value):
+            return None
         if not _looks_like_labeled_merchant_value(value):
             return None
-        return value
+        return find_merchant_by_name_fragment(value) or value
     return None
 
 
@@ -1956,17 +3062,63 @@ def _next_labeled_merchant_value(lines: list[Mapping[str, Any]], index: int) -> 
     compact = _compact_line(text)
     if not any(label in compact for label in MERCHANT_LABELS):
         return None
-    for nearby_index in range(index + 1, min(index + 4, len(lines))):
+    for nearby_index in range(index + 1, min(index + 6, len(lines))):
         candidate = _safe_line_text(lines[nearby_index])
         if not candidate:
             continue
         candidate_compact = _compact_line(candidate)
         if candidate_compact in {"-", "－", "−", "–", "—"}:
             continue
+        if any(label in candidate_compact for label in MERCHANT_LABELS):
+            continue
+        if (
+            DATE_CANDIDATE_PATTERN.search(candidate)
+            or BUSINESS_NUMBER_CANDIDATE_PATTERN.search(candidate)
+            or PHONE_LIKE_PATTERN.search(candidate)
+            or CARD_LIKE_PATTERN.search(candidate)
+            or _last_reasonable_amount(candidate) is not None
+        ):
+            continue
+        if _has_blocking_non_amount_label(candidate_compact):
+            continue
+        if _is_labeled_merchant_noise_value(candidate):
+            continue
+        if _is_nearby_owner_name_candidate(lines, nearby_index):
+            continue
         if _looks_like_labeled_merchant_value(candidate):
-            return candidate
-        return None
+            return find_merchant_by_name_fragment(candidate) or candidate
     return None
+
+
+def _is_labeled_merchant_noise_value(text: str) -> bool:
+    compact = _compact_line(text)
+    noise_values = {
+        "실제와",
+        "주소가",
+        "가맹점주소가",
+        "다른",
+        "경우",
+        "신고안내",
+        "포상금",
+        "지급",
+        "여신금융협회",
+        "고객용",
+        "영수증",
+    }
+    if compact in noise_values:
+        return True
+    return any(token in compact for token in ("신고안내", "포상금", "여신금융협회"))
+
+
+def _is_nearby_owner_name_candidate(lines: list[Mapping[str, Any]], index: int) -> bool:
+    text = _safe_line_text(lines[index]) or ""
+    compact = _compact_line(text)
+    if not re.fullmatch(r"[가-힣]{2,4}", compact):
+        return False
+    nearby_compact = _compact_line(
+        " ".join(_safe_line_text(lines[nearby_index]) or "" for nearby_index in range(index + 1, min(index + 4, len(lines))))
+    )
+    return any(marker in nearby_compact for marker in ("대표", "대표자", "성명", "주인"))
 
 
 def _business_block_merchant_value(lines: list[Mapping[str, Any]], index: int) -> str | None:
@@ -1980,15 +3132,146 @@ def _business_block_merchant_value(lines: list[Mapping[str, Any]], index: int) -
         or "사업자등록" in compact
     ):
         return None
+    merchant_from_same_line = _merchant_value_before_business_number(text)
+    if merchant_from_same_line:
+        return merchant_from_same_line
     merchant_from_business_number = find_merchant_by_business_number(text)
-    if merchant_from_business_number:
+    if merchant_from_business_number and ("사업자" in compact or "사업자등록" in compact):
         return merchant_from_business_number
     for previous_index in range(index - 1, max(index - 8, -1), -1):
         candidate_line = lines[previous_index]
         if _is_business_block_merchant_candidate(candidate_line):
             candidate = _safe_line_text(candidate_line)
-            return candidate
+            return find_merchant_by_name_fragment(candidate) or candidate
     return None
+
+
+def _app_screen_merchant_value(lines: list[Mapping[str, Any]], index: int) -> str | None:
+    text = _safe_line_text(lines[index])
+    if not text:
+        return None
+    candidate = _strip_leading_store_number(text)
+    compact = _compact_line(candidate)
+    if not _looks_like_app_screen_merchant(candidate):
+        return None
+    if any(token in compact for token in APP_SCREEN_MERCHANT_BLOCKERS):
+        return None
+    if _has_any_label(compact, KOREAN_DATE_LABELS) or _has_simple_total_amount_label(compact):
+        return None
+    previous_compact = _compact_line(
+        " ".join(_safe_line_text(lines[nearby_index]) or "" for nearby_index in range(max(index - 8, 0), index))
+    )
+    next_compact = _compact_line(
+        " ".join(_safe_line_text(lines[nearby_index]) or "" for nearby_index in range(index + 1, min(index + 8, len(lines))))
+    )
+    if sum(1 for marker in APP_SCREEN_MARKERS if marker in previous_compact) < 2:
+        return None
+    if not (
+        _has_any_label(next_compact, KOREAN_DATE_LABELS)
+        or _has_simple_total_amount_label(next_compact)
+        or "\uce74\ub4dc\uc774\ub984" in next_compact
+    ):
+        return None
+    return find_merchant_by_name_fragment(candidate) or candidate
+
+
+def _is_app_navigation_label(lines: list[Mapping[str, Any]], index: int) -> bool:
+    text = _safe_line_text(lines[index])
+    if not text:
+        return False
+    compact = _compact_line(text).strip(":")
+    if compact not in {"\uacb0\uc81c", "\ucde8\uc18c", "\uc815\ubcf4", "\uc601\uc218\uc99d"}:
+        return False
+    nearby_compact = _compact_line(
+        " ".join(_safe_line_text(lines[nearby_index]) or "" for nearby_index in range(max(index - 3, 0), min(index + 5, len(lines))))
+    )
+    return any(marker in nearby_compact for marker in APP_SCREEN_MARKERS)
+
+
+def _looks_like_app_screen_merchant(text: str) -> bool:
+    value = str(text or "").strip()
+    if len(value) < 2 or len(value) > 30 or value == "[REDACTED]":
+        return False
+    if DATE_CANDIDATE_PATTERN.search(value) or BUSINESS_NUMBER_CANDIDATE_PATTERN.search(value):
+        return False
+    if PHONE_LIKE_PATTERN.search(value) or CARD_LIKE_PATTERN.search(value):
+        return False
+    if _last_reasonable_amount(value) is not None:
+        return False
+    if re.search(r"\d{4,}", value):
+        return False
+    if _looks_like_address_fragment(_compact_line(value)):
+        return False
+    return bool(re.search(r"[\uac00-\ud7a3A-Za-z]", value))
+
+
+def _merchant_value_before_business_number(text: str) -> str | None:
+    match = BUSINESS_NUMBER_CANDIDATE_PATTERN.search(text)
+    if not match:
+        return None
+    prefix = str(text[: match.start()] or "").strip()
+    if not prefix:
+        return None
+    parts = [
+        _clean_inline_merchant_segment(part)
+        for part in re.split(r"[/|｜\\()\[\]{}:：]+", prefix)
+    ]
+    for candidate in reversed([part for part in parts if part]):
+        if _is_inline_business_number_merchant_candidate(candidate):
+            return candidate
+    fallback = _clean_inline_merchant_segment(prefix)
+    if _is_inline_business_number_merchant_candidate(fallback):
+        return fallback
+    return None
+
+
+def _clean_inline_merchant_segment(value: str) -> str:
+    text = str(value or "").strip()
+    text = re.sub(
+        r"^\s*(?:상호명?|매장명|가맹점명|점포명|사업장명|상점명)\s*[-:：]?\s*",
+        "",
+        text,
+    )
+    text = re.sub(r"^\s*\d{1,4}\s*[\).,:\-]?\s+", "", text)
+    return text.strip(" \t\r\n-–—_.,;·")
+
+
+def _is_inline_business_number_merchant_candidate(text: str) -> bool:
+    value = str(text or "").strip()
+    if len(value) < 2 or len(value) > 40 or value == "[REDACTED]":
+        return False
+    compact = _compact_line(value)
+    if DATE_CANDIDATE_PATTERN.search(value) or BUSINESS_NUMBER_CANDIDATE_PATTERN.search(value):
+        return False
+    if PHONE_LIKE_PATTERN.search(value) or CARD_LIKE_PATTERN.search(value):
+        return False
+    if _last_reasonable_amount(value) is not None:
+        return False
+    if re.search(r"\d{6,}", value):
+        return False
+    blocked_tokens = (
+        "사업자",
+        "대표",
+        "주소",
+        "TEL",
+        "전화",
+        "승인",
+        "카드",
+        "합계",
+        "공급",
+        "부가",
+        "세액",
+        "번호",
+        "고유",
+        "고객용",
+        "영수증",
+        "수량",
+    )
+    if any(token.lower() in compact.lower() for token in blocked_tokens):
+        return False
+    if _looks_like_address_fragment(compact):
+        return False
+    return _looks_like_business_block_merchant(value)
 
 
 def _top_known_merchant_value(lines: list[Mapping[str, Any]], index: int) -> str | None:
@@ -1998,6 +3281,9 @@ def _top_known_merchant_value(lines: list[Mapping[str, Any]], index: int) -> str
     text = _safe_line_text(line)
     if not text:
         return None
+    known_merchant = find_merchant_by_name_fragment(text)
+    if known_merchant:
+        return known_merchant
     compact = _compact_line(text)
     if "gste" in compact:
         return "GS THE FRESH"
@@ -2109,6 +3395,11 @@ def _looks_like_business_block_merchant(text: str) -> bool:
         "카페",
         "커피",
         "식당",
+        "고깃집",
+        "축산",
+        "유통",
+        "김밥",
+        "분식",
         "약국",
         "병원",
         "주유소",
@@ -2160,8 +3451,13 @@ def _has_zero_safe_amount_label(compact: str) -> bool:
         GROSS_LABELS,
         PAID_AMOUNT_LABELS,
         FINAL_LABELS,
+        SIMPLE_TOTAL_AMOUNT_LABELS,
     )
     return any(_has_any_label(compact, labels) for labels in label_groups)
+
+
+def _has_simple_total_amount_label(compact: str) -> bool:
+    return _has_any_label(compact, SIMPLE_TOTAL_AMOUNT_LABELS)
 
 
 def _has_paid_amount_label(compact: str) -> bool:
@@ -2246,6 +3542,30 @@ def _nearby_split_amount_fragments(lines: list[Mapping[str, Any]], index: int, *
                 amount = int(amount_text)
                 if 1_000 <= amount <= 10_000_000:
                     return amount
+    return None
+
+
+def _nearby_currency_split_amount(lines: list[Mapping[str, Any]], index: int, *, max_lines: int = 3) -> int | None:
+    first_fragment: str | None = None
+    for nearby_index in range(index + 1, min(index + max_lines + 1, len(lines))):
+        candidate_text = _safe_line_text(lines[nearby_index])
+        if not candidate_text:
+            continue
+        candidate_compact = _compact_line(candidate_text)
+        if candidate_compact == "-":
+            continue
+        if _has_blocking_non_amount_label(candidate_compact):
+            return None
+        if first_fragment is None:
+            first_fragment = _leading_currency_amount_fragment(candidate_text)
+            continue
+        second_fragment = _trailing_currency_amount_fragment(candidate_text)
+        if second_fragment is None:
+            return None
+        amount = int(f"{first_fragment}{second_fragment}")
+        if 1_000 <= amount <= 10_000_000:
+            return amount
+        return None
     return None
 
 
@@ -2475,6 +3795,38 @@ def _amount_fragment_digits(text: str, *, allow_zero_group: bool = False) -> str
     if int(digits) <= 9 and not (allow_zero_group and len(digits) == 3 and set(digits) == {"0"}):
         return None
     return digits
+
+
+def _leading_currency_amount_fragment(text: str) -> str | None:
+    value = str(text or "").strip()
+    if not value:
+        return None
+    if PHONE_LIKE_PATTERN.search(value) or CARD_LIKE_PATTERN.search(value):
+        return None
+    translated = value.translate(str.maketrans({"O": "0", "o": "0", "I": "1", "l": "1", "|": "1", "B": "8", "S": "5"}))
+    if not re.search(r"[\u20a9\\￦wW]", translated):
+        return None
+    digits = re.sub(r"\D", "", translated)
+    if not (1 <= len(digits) <= 3):
+        return None
+    if int(digits) <= 9:
+        return None
+    return digits
+
+
+def _trailing_currency_amount_fragment(text: str) -> str | None:
+    value = str(text or "").strip()
+    if not value:
+        return None
+    if PHONE_LIKE_PATTERN.search(value) or CARD_LIKE_PATTERN.search(value):
+        return None
+    translated = value.translate(str.maketrans({"O": "0", "o": "0", "I": "1", "l": "1", "|": "1", "B": "8", "S": "5"}))
+    digits = re.sub(r"\D", "", translated)
+    if len(digits) == 3:
+        return digits
+    if len(digits) == 4 and digits[0] == "1":
+        return digits[-3:]
+    return None
 
 
 def _loose_trailing_amount_fragment_digits(text: str) -> str | None:

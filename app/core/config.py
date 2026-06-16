@@ -23,6 +23,10 @@ DEFAULT_OUTPUT_ROOT = Path("data/outputs")
 DEFAULT_UPLOAD_RETENTION_DAYS = 7
 DEFAULT_OUTPUT_RETENTION_DAYS = 7
 DEFAULT_CLEANUP_DRY_RUN = True
+DEFAULT_PADDLE_USE_GPU = False
+DEFAULT_PADDLE_USE_ANGLE_CLS = False
+DEFAULT_PADDLE_LANG = "korean"
+DEFAULT_PADDLE_SHOW_LOG = False
 
 
 @dataclass(frozen=True)
@@ -47,6 +51,10 @@ class AppConfig:
     azure_ocr_max_poll_attempts: int = DEFAULT_AZURE_OCR_MAX_POLL_ATTEMPTS
     azure_ocr_max_retries: int = DEFAULT_AZURE_OCR_MAX_RETRIES
     azure_ocr_ignore_env_proxy: bool = DEFAULT_AZURE_OCR_IGNORE_ENV_PROXY
+    paddle_use_gpu: bool = DEFAULT_PADDLE_USE_GPU
+    paddle_use_angle_cls: bool = DEFAULT_PADDLE_USE_ANGLE_CLS
+    paddle_lang: str = DEFAULT_PADDLE_LANG
+    paddle_show_log: bool = DEFAULT_PADDLE_SHOW_LOG
 
 
 def get_config() -> AppConfig:
@@ -102,6 +110,10 @@ def get_config() -> AppConfig:
             "AZURE_OCR_IGNORE_ENV_PROXY",
             DEFAULT_AZURE_OCR_IGNORE_ENV_PROXY,
         ),
+        paddle_use_gpu=_bool_env("PADDLE_USE_GPU", DEFAULT_PADDLE_USE_GPU),
+        paddle_use_angle_cls=_bool_env("PADDLE_USE_ANGLE_CLS", DEFAULT_PADDLE_USE_ANGLE_CLS),
+        paddle_lang=os.getenv("PADDLE_LANG", DEFAULT_PADDLE_LANG).strip() or DEFAULT_PADDLE_LANG,
+        paddle_show_log=_bool_env("PADDLE_SHOW_LOG", DEFAULT_PADDLE_SHOW_LOG),
     )
 
 

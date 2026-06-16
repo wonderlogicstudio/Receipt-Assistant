@@ -691,5 +691,57 @@
       "review_required_expected": true
     },
     "risk_tags": ["sum_checked_total", "payment_missing"]
+  },
+  {
+    "sample_id": "synthetic_rotated_split_sales_date_merchant_001",
+    "description": "회전된 카드 영수증에서 매출일/매장명 라벨과 값이 분리되어도 안전한 후보만 추출",
+    "source_file_name": "synthetic_rotated_split_sales_date_merchant_001.jpg",
+    "paddle_lines": [
+      {"text": "[영수증]", "confidence": 0.91},
+      {"text": "매출일", "confidence": 0.94},
+      {"text": "20260608", "confidence": 0.98},
+      {"text": "매장명", "confidence": 0.94},
+      {"text": "-", "confidence": 0.62},
+      {"text": "테스트카페 종로점", "confidence": 0.97},
+      {"text": "합계금액", "confidence": 0.95},
+      {"text": "107,000", "confidence": 0.99},
+      {"text": "신용카드", "confidence": 0.96},
+      {"text": "승인번호 12345678", "confidence": 0.93}
+    ],
+    "expected": {
+      "merchant_name": "테스트카페 종로점",
+      "transaction_date": "2026-06-08",
+      "total_amount": 107000,
+      "final_amount": 107000,
+      "payment_method": "카드",
+      "review_required_expected": true
+    },
+    "risk_tags": ["rotated_receipt", "split_sales_date_label", "split_merchant_label", "approval_number_guard"]
+  },
+  {
+    "sample_id": "synthetic_unlabeled_merchant_business_approval_time_001",
+    "description": "상호 라벨 없이 사업자번호 앞 상호와 승인시간 인접 8자리 날짜를 안전하게 추출",
+    "source_file_name": "synthetic_unlabeled_merchant_business_approval_time_001.jpg",
+    "paddle_lines": [
+      {"text": "[영수증]", "confidence": 0.91},
+      {"text": "총각김밥 / 152-21-01299 / 박준이", "confidence": 0.98},
+      {"text": "승인시간", "confidence": 0.95},
+      {"text": "20260526", "confidence": 0.99},
+      {"text": "12:53:09", "confidence": 0.99},
+      {"text": "합계금액", "confidence": 0.96},
+      {"text": "5,600", "confidence": 0.99},
+      {"text": "신용카드", "confidence": 0.96},
+      {"text": "승인번호 202605260001", "confidence": 0.93}
+    ],
+    "expected": {
+      "merchant_name": "총각김밥",
+      "transaction_date": "2026-05-26",
+      "business_number": "152-21-01299",
+      "total_amount": 5600,
+      "final_amount": 5600,
+      "payment_method": "카드",
+      "review_required_expected": true
+    },
+    "risk_tags": ["unlabeled_merchant", "business_number_context", "approval_time_date", "approval_number_guard"]
   }
 ]

@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from app.classifier.merchant_dictionary import find_merchant_by_business_number
+from app.classifier.merchant_dictionary import find_merchant_by_business_number, find_merchant_by_name_fragment
 from app.core.enums import EvidenceType, OCRStatus, ReviewStatus
 from app.core.ocr_models import OCRResult
 from app.core.receipt_models import ReceiptRecord
@@ -259,6 +259,7 @@ class ReceiptParser:
         *,
         source_file_id: str | None = None,
         source_file_name: str | None = None,
+        stored_relative_path: str | None = None,
         ocr_provider: str | None = None,
         confidence: float | None = None,
     ) -> ReceiptRecord:
@@ -283,7 +284,7 @@ class ReceiptParser:
             source_file_id=source_file_id or "standard-ocr-context-source",
             ocr_result_id=None,
             source_file_name=display_file_name,
-            stored_relative_path=None,
+            stored_relative_path=stored_relative_path,
             evidence_type=_evidence_type_for_source_file(display_file_name, bool(safe_context_text)),
             transaction_date=fields["transaction_date"],
             merchant_name=fields["merchant_name"],
@@ -322,12 +323,14 @@ class ReceiptParser:
         *,
         source_file_id: str | None = None,
         source_file_name: str | None = None,
+        stored_relative_path: str | None = None,
     ) -> ReceiptRecord:
         context = build_parser_context_from_standard_ocr(result)
         return self.parse_standard_context(
             context,
             source_file_id=source_file_id or result.source_file_id,
             source_file_name=source_file_name or result.source_file_name,
+            stored_relative_path=stored_relative_path,
             ocr_provider=result.provider,
             confidence=result.confidence,
         )
@@ -436,6 +439,9 @@ def _apply_standard_context_candidates(fields: dict[str, Any], context: Standard
     )
     business_number = normalize_business_number(business_number_candidate)
     payment_method = normalize_merchant_name(_first_context_value(context.candidate_map, "payment_method"))
+    merchant_from_name_fragment = find_merchant_by_name_fragment(merchant_name)
+    if merchant_from_name_fragment:
+        merchant_name = merchant_from_name_fragment
     merchant_from_business_number = find_merchant_by_business_number(business_number)
     if not _should_prefer_business_number_merchant(merchant_name, merchant_from_business_number):
         merchant_from_business_number = None
@@ -477,8 +483,12 @@ def _apply_standard_context_amounts(fields: dict[str, Any], context: StandardOCR
         and fields["paid_amount"] > fields["final_amount"]
         and fields["paid_amount"] - fields["final_amount"] >= 10000
     ):
-        fields["final_amount"] = fields["paid_amount"]
-        amount_warnings.append("final_amount_replaced_by_paid_amount_candidate")
+        if _is_implausibly_large_paid_amount(fields["paid_amount"], fields["final_amount"]):
+            fields["paid_amount"] = None
+            amount_warnings.append("paid_amount_identifier_candidate_ignored")
+        else:
+            fields["final_amount"] = fields["paid_amount"]
+            amount_warnings.append("final_amount_replaced_by_paid_amount_candidate")
     if fields["final_amount"] is not None and fields["paid_amount"] is not None and fields["final_amount"] != fields["paid_amount"]:
         amount_warnings.append("final_paid_amount_mismatch")
 
@@ -491,9 +501,13 @@ def _apply_standard_context_amounts(fields: dict[str, Any], context: StandardOCR
             and fields["paid_amount"] > fields["total_amount"]
             and fields["paid_amount"] - fields["total_amount"] >= 10000
         ):
-            fields["total_amount"] = fields["paid_amount"]
-            fields["amount_source"] = "paid_amount_corrected_total"
-            amount_warnings.append("total_amount_replaced_by_paid_amount_candidate")
+            if _is_implausibly_large_paid_amount(fields["paid_amount"], fields["total_amount"]):
+                fields["paid_amount"] = None
+                amount_warnings.append("paid_amount_identifier_candidate_ignored")
+            else:
+                fields["total_amount"] = fields["paid_amount"]
+                fields["amount_source"] = "paid_amount_corrected_total"
+                amount_warnings.append("total_amount_replaced_by_paid_amount_candidate")
     else:
         chosen_total, amount_source = _choose_total_amount(
             paid_amount=fields["paid_amount"],
@@ -633,6 +647,14 @@ def _context_amount(context: StandardOCRParserContext, candidate_type: str, *, d
     if discount:
         return normalize_discount_amount(value)
     return normalize_amount(value)
+
+
+def _is_implausibly_large_paid_amount(paid_amount: int | None, expected_amount: int | None) -> bool:
+    if paid_amount is None or expected_amount is None or expected_amount <= 0:
+        return False
+    if paid_amount <= expected_amount:
+        return False
+    return paid_amount > expected_amount * 20
 
 
 def _first_context_value(candidate_map: dict[str, list[str]], *candidate_types: str) -> str | None:
@@ -878,6 +900,9 @@ def _sanitize_paid_amount_candidate(
     if expected_amount is None or expected_amount <= 0 or paid_amount == expected_amount:
         return paid_amount
 
+    if _is_implausibly_large_paid_amount(paid_amount, expected_amount):
+        warnings.append("paid_amount_identifier_candidate_ignored")
+        return None
     if paid_amount <= 0:
         warnings.append("paid_amount_mismatch_ignored")
         return None
@@ -1615,7 +1640,7 @@ def _extract_merchant_name(
 ) -> tuple[str | None, list[str]]:
     merchant_from_json = _merchant_from_json(raw_json)
     if _is_usable_merchant_candidate(merchant_from_json):
-        return normalize_merchant_name(merchant_from_json), []
+        return find_merchant_by_name_fragment(merchant_from_json) or normalize_merchant_name(merchant_from_json), []
 
     merchant_from_business_number = find_merchant_by_business_number(business_number)
     if merchant_from_business_number:
@@ -1623,12 +1648,12 @@ def _extract_merchant_name(
 
     merchant_from_labeled_text = _merchant_from_labeled_text(raw_text)
     if _is_usable_merchant_candidate(merchant_from_labeled_text):
-        return normalize_merchant_name(merchant_from_labeled_text), []
+        return find_merchant_by_name_fragment(merchant_from_labeled_text) or normalize_merchant_name(merchant_from_labeled_text), []
 
     merchant_from_context, context_warning = _merchant_from_receipt_context(raw_text)
     if _is_usable_merchant_candidate(merchant_from_context):
         warnings = [context_warning] if context_warning else []
-        return normalize_merchant_name(merchant_from_context), warnings
+        return find_merchant_by_name_fragment(merchant_from_context) or normalize_merchant_name(merchant_from_context), warnings
 
     return None, []
 
@@ -1647,7 +1672,24 @@ def _should_prefer_business_number_merchant(
         return True
     if not re.search(r"[가-힣]", current_merchant):
         return True
+    if _looks_like_weak_merchant_candidate(current_merchant, business_number_merchant):
+        return True
     return current_compact in dictionary_compact or dictionary_compact in current_compact
+
+
+def _looks_like_weak_merchant_candidate(current_merchant: str, business_number_merchant: str) -> bool:
+    current_compact = re.sub(r"[^0-9A-Za-z가-힣]", "", current_merchant).lower()
+    dictionary_compact = re.sub(r"[^0-9A-Za-z가-힣]", "", business_number_merchant).lower()
+    if not current_compact or len(dictionary_compact) <= len(current_compact):
+        return False
+    if re.search(r"\d", current_compact):
+        return True
+    if len(current_compact) <= 4:
+        return True
+    if "시장" in current_compact and "시설관리공단" in dictionary_compact:
+        return True
+    weak_suffixes = ("점", "지점")
+    return any(current_compact.endswith(suffix) for suffix in weak_suffixes) and len(current_compact) <= 5
 
 
 def _merchant_from_json(raw_json: dict[str, Any]) -> str | None:
@@ -1721,7 +1763,8 @@ def _merchant_from_receipt_context(raw_text: str) -> tuple[str | None, str | Non
 
 
 def _merchant_from_labeled_line(line: str) -> str | None:
-    match = re.match(rf"(?:{'|'.join(MERCHANT_LABEL_KEYWORDS)})\s*[:：]\s*(.+)", line)
+    label_pattern = "|".join(re.escape(label) for label in MERCHANT_LABEL_KEYWORDS)
+    match = re.match(rf"^\s*(?:{label_pattern})\s*[:\-–—：]?\s*(.+?)\s*$", line)
     if not match:
         return None
     return normalize_merchant_name(match.group(1))
@@ -1740,6 +1783,8 @@ def _is_usable_merchant_candidate(value: str | None) -> bool:
     if is_receipt_metadata_line(candidate):
         return False
     compact = re.sub(r"\s+", "", candidate)
+    if len(compact) < 2:
+        return False
     if compact.startswith(("대표", "대표자", "주소", "TEL", "Tel", "tel", "전화")):
         return False
     return True

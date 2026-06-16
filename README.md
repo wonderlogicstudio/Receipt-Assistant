@@ -84,6 +84,10 @@ Windows 개발/진단 중에는 기존 Streamlit 서버가 같은 포트에 남�
 
 ```text
 OCR_PROVIDER=mock
+PADDLE_USE_GPU=false
+PADDLE_USE_ANGLE_CLS=false
+PADDLE_LANG=korean
+PADDLE_SHOW_LOG=false
 APP_DB_PATH=data/app.db
 UPLOAD_DIR=data/uploads
 OUTPUT_DIR=data/outputs
@@ -258,6 +262,12 @@ The New Job screen now includes `PaddleOCR Local` in the per-run OCR provider
 selector. This does not change the configured default provider; it only applies
 to the current upload batch when the user explicitly selects it.
 
+When `PaddleOCR Local` is selected, the New Job screen also offers a per-run
+execution mode. `CPU stable mode` is the default. `GPU acceleration attempt`
+passes `use_gpu=True` only for the current batch and shows safe Paddle device
+diagnostics; if the installed Paddle build cannot use CUDA, the UI blocks the
+GPU run and asks the user to choose CPU mode.
+
 When selected, PaddleOCR results follow the safe standard path:
 
 `PaddleOCRProvider -> StandardOCRResult -> StandardOCRParserContext -> ReceiptParser.parse_standard_context() -> ReceiptRecord`
@@ -266,3 +276,15 @@ The flow keeps PDF handling unsupported/deferred for PaddleOCR, does not expose
 provider raw output, full OCR text, raw JSON, full local paths, secrets, or
 endpoint URLs, and does not change Excel export sheets/columns or Processing
 History schema.
+
+### Review UI source preview
+
+The review screen now supports a safe selected-row source preview. Reviewers can
+choose a row, see it highlighted, and compare the parsed fields with the original
+receipt file. JPG/JPEG/PNG files are previewed with `st.image`; PDF files show a
+safe notice instead of forced rendering.
+
+The preview uses `stored_relative_path` only, resolves files under the configured
+upload root, blocks traversal or files outside `data/uploads`, and displays file
+names only. It does not expose OCR raw text, provider raw JSON, full local paths,
+secrets, endpoint URLs, or sensitive raw values.

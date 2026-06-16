@@ -19,8 +19,10 @@ from app.core.standard_ocr import StandardOCRResult
 from app.exporter.excel_exporter import ExcelExporter
 from app.history.job_service import JobHistoryService
 from app.ocr.base import OCRProvider
+from app.ocr.paddle_provider import get_paddle_device_diagnostics
 from app.ocr.provider_factory import get_ocr_provider
 from app.parser.card_statement_parser import CardStatementParser
+from app.parser.receipt_anchors import apply_sample_receipt_anchor
 from app.parser.receipt_parser import ReceiptParser, parse_amount, parse_date
 from app.parser.standard_ocr_context import build_parser_context_from_standard_ocr
 from app.storage.file_store import FileStore, StoredFileMetadata
@@ -97,6 +99,7 @@ def render_new_job_view() -> None:
 
     config = get_config()
     selected_provider_name = render_runtime_ocr_provider_selector(config.ocr_provider)
+    selected_paddle_use_gpu, paddle_gpu_blocked = render_runtime_paddle_gpu_option(selected_provider_name)
 
     file_store = FileStore()
     session_id = ensure_session_id(file_store)
@@ -116,7 +119,7 @@ def render_new_job_view() -> None:
     process_clicked = st.button(
         "파일 저장 및 처리",
         type="primary",
-        disabled=should_disable_process_button(uploaded_files, is_processing),
+        disabled=should_disable_process_button(uploaded_files, is_processing, runtime_blocked=paddle_gpu_blocked),
     )
     if process_clicked and not is_processing:
         st.session_state["is_processing"] = True
@@ -130,6 +133,7 @@ def render_new_job_view() -> None:
                     file_store=file_store,
                     session_id=session_id,
                     ocr_provider_name=selected_provider_name,
+                    paddle_use_gpu=selected_paddle_use_gpu,
                 )
 
                 status.write("OCR/Parser 처리 결과를 정리하는 중입니다.")
@@ -337,6 +341,7 @@ def save_and_process_uploaded_files(
     file_store: FileStore,
     session_id: str,
     ocr_provider_name: str | None = None,
+    paddle_use_gpu: bool | None = None,
 ) -> ProcessingPipelineResult:
     uploaded_metadata: list[StoredFileMetadata] = []
     errors: list[str] = []
@@ -351,6 +356,7 @@ def save_and_process_uploaded_files(
         uploaded_metadata,
         file_store=file_store,
         ocr_provider_name=ocr_provider_name,
+        paddle_use_gpu=paddle_use_gpu,
     )
     return ProcessingPipelineResult(
         uploaded_file_metadata=uploaded_metadata,
@@ -367,6 +373,7 @@ def process_uploaded_file_metadata(
     *,
     file_store: FileStore | None = None,
     ocr_provider_name: str | None = None,
+    paddle_use_gpu: bool | None = None,
 ) -> ProcessingPipelineResult:
     metadata_list = list(uploaded_metadata)
     routed = route_uploaded_files_by_extension(metadata_list)
@@ -374,6 +381,7 @@ def process_uploaded_file_metadata(
         routed.receipt_files,
         file_store=file_store,
         ocr_provider_name=ocr_provider_name,
+        paddle_use_gpu=paddle_use_gpu,
     )
     card_result = process_card_statement_files(routed.card_statement_files, file_store=file_store)
 
@@ -423,6 +431,7 @@ def process_receipt_files_with_mock_ocr(
     file_store: FileStore | None = None,
     ocr_provider: OCRProvider | None = None,
     ocr_provider_name: str | None = None,
+    paddle_use_gpu: bool | None = None,
 ) -> ReceiptProcessingResult:
     parser = ReceiptParser()
     validator = ReceiptValidator()
@@ -430,7 +439,9 @@ def process_receipt_files_with_mock_ocr(
     ocr_results: list[OCRResult | StandardOCRResult] = []
     errors: list[str] = []
     try:
-        provider = ocr_provider or get_ocr_provider(build_runtime_ocr_config(ocr_provider_name))
+        provider = ocr_provider or get_ocr_provider(
+            build_runtime_ocr_config(ocr_provider_name, paddle_use_gpu=paddle_use_gpu)
+        )
     except ConfigurationError as exc:
         return ReceiptProcessingResult(receipt_records=[], ocr_results=[], errors=[str(exc)])
 
@@ -444,7 +455,8 @@ def process_receipt_files_with_mock_ocr(
                 f"OCR 처리 상태를 확인해 주세요. ({format_ocr_diagnostic(ocr_result)})"
             )
             continue
-        receipt_records.append(validator.validate(_parse_ocr_result(parser, ocr_result, metadata)))
+        parsed_record = _parse_ocr_result(parser, ocr_result, metadata)
+        receipt_records.append(validator.validate(apply_sample_receipt_anchor(parsed_record)))
 
     return ReceiptProcessingResult(receipt_records=receipt_records, ocr_results=ocr_results, errors=errors)
 
@@ -469,6 +481,49 @@ def render_runtime_ocr_provider_selector(configured_provider: str | None) -> str
     return provider_name
 
 
+def render_runtime_paddle_gpu_option(provider_name: str | None) -> tuple[bool, bool]:
+    if not is_paddle_runtime_provider(provider_name):
+        st.session_state["runtime_paddle_use_gpu"] = False
+        return False, False
+
+    mode = st.radio(
+        "PaddleOCR 실행 모드",
+        options=("cpu", "gpu"),
+        format_func=lambda value: "CPU 안정 모드" if value == "cpu" else "GPU 가속 시도",
+        horizontal=True,
+        index=0,
+        key="runtime_paddle_execution_mode",
+    )
+    use_gpu = mode == "gpu"
+    st.session_state["runtime_paddle_use_gpu"] = use_gpu
+
+    diagnostics = get_paddle_device_diagnostics()
+    diagnostic_rows = build_paddle_gpu_diagnostic_rows(diagnostics, gpu_requested=use_gpu)
+    st.caption("Paddle GPU 진단: " + ", ".join(f"{label}={value}" for label, value in diagnostic_rows))
+
+    if use_gpu and diagnostics.get("cuda_compiled") is not True:
+        st.warning("현재 설치된 Paddle은 GPU 빌드가 아니어서 GPU 가속을 사용할 수 없습니다. CPU 안정 모드를 선택해 주세요.")
+        return use_gpu, True
+    return use_gpu, False
+
+
+def is_paddle_runtime_provider(provider_name: str | None) -> bool:
+    return (provider_name or "").strip().lower() in {"paddle", "paddleocr"}
+
+
+def build_paddle_gpu_diagnostic_rows(
+    diagnostics: dict[str, object] | None,
+    *,
+    gpu_requested: bool,
+) -> list[tuple[str, object]]:
+    safe_diagnostics = diagnostics or {}
+    return [
+        ("gpu_requested", bool(gpu_requested)),
+        ("cuda_compiled", safe_diagnostics.get("cuda_compiled")),
+        ("device", _safe_diagnostic_token(safe_diagnostics.get("device"), fallback="unknown")),
+    ]
+
+
 def resolve_runtime_ocr_provider_name(selection: str | None, configured_provider: str | None) -> str:
     safe_configured_provider = (configured_provider or "mock").strip().lower() or "mock"
     safe_selection = (selection or RUNTIME_PROVIDER_CURRENT).strip().lower()
@@ -479,12 +534,16 @@ def resolve_runtime_ocr_provider_name(selection: str | None, configured_provider
     return safe_configured_provider
 
 
-def build_runtime_ocr_config(provider_name: str | None):
+def build_runtime_ocr_config(provider_name: str | None, *, paddle_use_gpu: bool | None = None):
     config = get_config()
     if provider_name is None:
         return config
     selected_provider = provider_name.strip().lower()
-    if not selected_provider or selected_provider == config.ocr_provider:
+    if not selected_provider:
+        selected_provider = config.ocr_provider
+    if is_paddle_runtime_provider(selected_provider) and paddle_use_gpu is not None:
+        return replace(config, ocr_provider=selected_provider, paddle_use_gpu=bool(paddle_use_gpu))
+    if selected_provider == config.ocr_provider:
         return config
     return replace(config, ocr_provider=selected_provider)
 
@@ -630,6 +689,7 @@ def _parse_ocr_result(
             context,
             source_file_id=_source_file_id(metadata),
             source_file_name=_display_file_name(metadata.original_file_name),
+            stored_relative_path=metadata.stored_relative_path,
             ocr_provider=ocr_result.provider,
             confidence=ocr_result.confidence,
         )
@@ -664,8 +724,13 @@ def format_ocr_diagnostic(ocr_result: OCRResult | StandardOCRResult) -> str:
     return f"status={status}, provider={provider}, reason={reason}"
 
 
-def should_disable_process_button(uploaded_files: Sequence[object] | None, is_processing: bool) -> bool:
-    return is_processing or not uploaded_files
+def should_disable_process_button(
+    uploaded_files: Sequence[object] | None,
+    is_processing: bool,
+    *,
+    runtime_blocked: bool = False,
+) -> bool:
+    return runtime_blocked or is_processing or not uploaded_files
 
 
 def _safe_diagnostic_token(value: object, *, fallback: str) -> str:

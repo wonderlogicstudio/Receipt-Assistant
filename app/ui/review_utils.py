@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -51,7 +51,8 @@ COL_SOURCE_FILE_NAME = "원본파일명"
 COL_USER_NOTE = "비고"
 COL_REVIEW_PRIORITY = "검토우선순위"
 COL_MISSING_FIELDS = "누락필드"
-COL_QUALITY_FLAGS = "품질체크"
+COL_QUALITY_FLAGS = "검토사유요약"
+COL_SOURCE_PREVIEW = "원본보기"
 
 REVIEW_FILTER_ALL = "전체"
 REVIEW_FILTER_NEEDS_REVIEW = "검토필요"
@@ -91,10 +92,30 @@ INTERNAL_RECEIPT_ID = "__receipt_id"
 INTERNAL_SOURCE_FILE_ID = "__source_file_id"
 INTERNAL_OCR_RESULT_ID = "__ocr_result_id"
 
+PRIORITY_HIGH = "HIGH"
+PRIORITY_MEDIUM = "MEDIUM"
+PRIORITY_LOW = "LOW"
+PRIORITY_SORT_ORDER = {
+    PRIORITY_HIGH: 0,
+    PRIORITY_MEDIUM: 1,
+    PRIORITY_LOW: 2,
+}
+
+PREVIEW_KIND_IMAGE = "image"
+PREVIEW_KIND_PDF = "pdf"
+PREVIEW_KIND_UNAVAILABLE = "unavailable"
+PREVIEW_KIND_BLOCKED = "blocked"
+PREVIEW_KIND_MISSING = "missing"
+PREVIEW_KIND_UNSUPPORTED = "unsupported"
+IMAGE_PREVIEW_EXTENSIONS = {".jpg", ".jpeg", ".png"}
+PDF_PREVIEW_EXTENSIONS = {".pdf"}
+
 REVIEW_DISPLAY_COLUMNS = [
     COL_REVIEW_PRIORITY,
     COL_MISSING_FIELDS,
     COL_QUALITY_FLAGS,
+    COL_SOURCE_FILE_NAME,
+    COL_SOURCE_PREVIEW,
     COL_INCLUDED,
     COL_DATE,
     COL_MERCHANT,
@@ -121,7 +142,6 @@ REVIEW_DISPLAY_COLUMNS = [
     COL_CARD_MATCH_STATUS,
     COL_CARD_MATCH_REASON,
     COL_DUPLICATE_SUSPECTED,
-    COL_SOURCE_FILE_NAME,
     COL_USER_NOTE,
 ]
 
@@ -142,6 +162,7 @@ REVIEW_READ_ONLY_COLUMNS = [
     COL_REVIEW_PRIORITY,
     COL_MISSING_FIELDS,
     COL_QUALITY_FLAGS,
+    COL_SOURCE_PREVIEW,
     COL_RECOMMENDED_CATEGORY,
     COL_GROSS_AMOUNT,
     COL_DISCOUNT_AMOUNT,
@@ -163,9 +184,33 @@ REVIEW_READ_ONLY_COLUMNS = [
 ]
 
 
+@dataclass(frozen=True)
+class ReceiptSourcePreview:
+    kind: str
+    source_file_name: str
+    path: Path | None = None
+    message: str = ""
+
+    @property
+    def is_image(self) -> bool:
+        return self.kind == PREVIEW_KIND_IMAGE and self.path is not None
+
+    @property
+    def is_pdf(self) -> bool:
+        return self.kind == PREVIEW_KIND_PDF
+
+
 def receipt_records_to_review_dataframe(records: list[ReceiptRecord]) -> pd.DataFrame:
-    rows = [_record_to_review_row(record) for record in records]
+    rows = [_record_to_review_row(record) for record in sort_receipt_records_for_review(records)]
     return pd.DataFrame(rows, columns=[*REVIEW_DISPLAY_COLUMNS, *tracking_columns()])
+
+
+def sort_receipt_records_for_review(records: list[ReceiptRecord]) -> list[ReceiptRecord]:
+    sorted_items = sorted(
+        enumerate(records),
+        key=lambda item: (PRIORITY_SORT_ORDER.get(review_priority_label(item[1]), 99), item[0]),
+    )
+    return [record for _, record in sorted_items]
 
 
 def filter_receipt_records_for_review(
@@ -224,21 +269,89 @@ def review_issue_labels(record: ReceiptRecord) -> list[str]:
 
 
 def review_priority_label(record: ReceiptRecord) -> str:
-    issues = set(review_issue_labels(record))
-    high_priority_issues = {
-        ISSUE_TOTAL_MISSING,
-        ISSUE_DATE_MISSING,
-        ISSUE_MERCHANT_MISSING,
-        ISSUE_DISCOUNT_ZERO_PAYMENT,
-        ISSUE_SENSITIVE_TEXT,
-    }
-    if issues & high_priority_issues:
-        return "높음"
-    if issues:
-        return "보통"
-    if record.review_status != ReviewStatus.APPROVED.value:
-        return "낮음"
-    return "완료"
+    if (
+        record.transaction_date is None
+        or not record.merchant_name
+        or record.total_amount is None
+        or bool(record.amount_warnings)
+        or bool(record.vat_warnings)
+        or bool(record.vat_review_required)
+        or bool(record.sensitive_text_detected)
+        or bool(record.sensitive_text_categories)
+        or record.card_match_status in {
+            CardMatchStatus.NEEDS_REVIEW.value,
+            CardMatchStatus.CANDIDATE.value,
+            CardMatchStatus.MISMATCH.value,
+        }
+    ):
+        return PRIORITY_HIGH
+    if _is_uncategorized_recommendation(record.recommended_expense_category) or record.review_status == ReviewStatus.PENDING.value:
+        return PRIORITY_MEDIUM
+    if record.review_status == ReviewStatus.APPROVED.value and not _joined_reasons(record):
+        return PRIORITY_LOW
+    return PRIORITY_MEDIUM
+
+
+def missing_field_labels(record: ReceiptRecord) -> list[str]:
+    missing_fields: list[str] = []
+    if record.transaction_date is None:
+        missing_fields.append("transaction_date")
+    if not record.merchant_name:
+        missing_fields.append("merchant_name")
+    if record.total_amount is None:
+        missing_fields.append("total_amount")
+    if not record.expense_category:
+        missing_fields.append("expense_category")
+    return missing_fields
+
+
+def resolve_receipt_source_preview(
+    record: ReceiptRecord,
+    *,
+    upload_root: Path | str = Path("data/uploads"),
+    upload_relative_root: Path | str = Path("data/uploads"),
+) -> ReceiptSourcePreview:
+    file_name = _display_file_name(record.source_file_name) or "receipt"
+    if not record.stored_relative_path:
+        return ReceiptSourcePreview(
+            kind=PREVIEW_KIND_UNAVAILABLE,
+            source_file_name=file_name,
+            message="원본 파일 위치 정보가 없습니다.",
+        )
+
+    safe_path = _resolve_safe_upload_path(
+        record.stored_relative_path,
+        upload_root=Path(upload_root),
+        upload_relative_root=Path(upload_relative_root),
+    )
+    if safe_path is None:
+        return ReceiptSourcePreview(
+            kind=PREVIEW_KIND_BLOCKED,
+            source_file_name=file_name,
+            message="안전한 업로드 경로의 파일만 미리볼 수 있습니다.",
+        )
+    if not safe_path.exists():
+        return ReceiptSourcePreview(
+            kind=PREVIEW_KIND_MISSING,
+            source_file_name=file_name,
+            message="원본 파일을 찾을 수 없습니다.",
+        )
+
+    extension = safe_path.suffix.lower()
+    if extension in IMAGE_PREVIEW_EXTENSIONS:
+        return ReceiptSourcePreview(kind=PREVIEW_KIND_IMAGE, source_file_name=file_name, path=safe_path)
+    if extension in PDF_PREVIEW_EXTENSIONS:
+        return ReceiptSourcePreview(
+            kind=PREVIEW_KIND_PDF,
+            source_file_name=file_name,
+            path=safe_path,
+            message="PDF 원본 파일입니다. 다운로드 또는 별도 열기 대상입니다.",
+        )
+    return ReceiptSourcePreview(
+        kind=PREVIEW_KIND_UNSUPPORTED,
+        source_file_name=file_name,
+        message="미리보기를 지원하지 않는 파일 형식입니다.",
+    )
 
 
 def review_dataframe_to_receipt_records(
@@ -340,6 +453,16 @@ def build_review_summary(records: list[ReceiptRecord]) -> dict[str, int]:
     }
 
 
+def format_display_amount(value: object, *, suffix: str = "원", missing: str = "-") -> str:
+    if value is None:
+        return missing
+    try:
+        amount = int(float(str(value).replace(",", "").strip()))
+    except (TypeError, ValueError):
+        return missing
+    return f"{amount:,}{suffix}"
+
+
 def tracking_columns() -> list[str]:
     return [INTERNAL_RECEIPT_ID, INTERNAL_SOURCE_FILE_ID, INTERNAL_OCR_RESULT_ID]
 
@@ -349,6 +472,7 @@ def _record_to_review_row(record: ReceiptRecord) -> dict[str, Any]:
         COL_REVIEW_PRIORITY: review_priority_label(record),
         COL_MISSING_FIELDS: _joined_missing_fields(record),
         COL_QUALITY_FLAGS: "; ".join(review_issue_labels(record)) or "-",
+        COL_SOURCE_PREVIEW: _source_preview_label(record),
         COL_INCLUDED: not is_excluded_record(record),
         COL_DATE: record.transaction_date,
         COL_MERCHANT: record.merchant_name,
@@ -403,18 +527,7 @@ def _joined_vat_reasons(record: ReceiptRecord) -> str:
 
 
 def _joined_missing_fields(record: ReceiptRecord) -> str:
-    missing_fields = []
-    if record.transaction_date is None:
-        missing_fields.append("날짜")
-    if not record.merchant_name:
-        missing_fields.append("상호")
-    if not record.business_number:
-        missing_fields.append("사업자번호")
-    if record.total_amount is None:
-        missing_fields.append("총액")
-    if not record.payment_method:
-        missing_fields.append("결제수단")
-    return "; ".join(missing_fields) or "-"
+    return ", ".join(missing_field_labels(record)) or "-"
 
 
 def _matches_review_status_filter(record: ReceiptRecord, status_filter: str) -> bool:
@@ -442,6 +555,50 @@ def _display_file_name(file_name: str | None) -> str | None:
     if not file_name:
         return None
     return Path(str(file_name).replace("\\", "/")).name
+
+
+def _source_preview_label(record: ReceiptRecord) -> str:
+    path_text = str(record.stored_relative_path or record.source_file_name or "")
+    extension = Path(path_text.replace("\\", "/")).suffix.lower()
+    if extension in IMAGE_PREVIEW_EXTENSIONS:
+        return "이미지"
+    if extension in PDF_PREVIEW_EXTENSIONS:
+        return "PDF"
+    return "-"
+
+
+def _is_uncategorized_recommendation(value: str | None) -> bool:
+    if not value:
+        return True
+    normalized = str(value).strip().lower()
+    return normalized in {"-", "uncategorized", "unknown", "none", "미분류"}
+
+
+def _resolve_safe_upload_path(
+    stored_relative_path: str,
+    *,
+    upload_root: Path,
+    upload_relative_root: Path,
+) -> Path | None:
+    normalized_text = str(stored_relative_path).replace("\\", "/").strip()
+    if not normalized_text:
+        return None
+    relative_path = Path(normalized_text)
+    if relative_path.is_absolute() or ".." in relative_path.parts:
+        return None
+    try:
+        upload_subpath = relative_path.relative_to(upload_relative_root)
+    except ValueError:
+        return None
+    if ".." in upload_subpath.parts:
+        return None
+    upload_root_resolved = upload_root.resolve(strict=False)
+    candidate = (upload_root_resolved / upload_subpath).resolve(strict=False)
+    try:
+        candidate.relative_to(upload_root_resolved)
+    except ValueError:
+        return None
+    return candidate
 
 
 def _split_reason_text(value: str | None) -> list[str]:

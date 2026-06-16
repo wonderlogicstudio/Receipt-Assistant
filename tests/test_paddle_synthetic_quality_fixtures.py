@@ -1705,15 +1705,19 @@ def test_business_number_dictionary_fills_known_sample_merchant() -> None:
 def test_business_number_dictionary_fills_human_anchor_sample_merchants() -> None:
     cases = [
         ("101-81-30747", "한화호텔앤드리조트(주) 설악"),
+        ("104-81-91189", "롯데 유스컬처빌 파주점"),
         ("106-81-03487", "용산 아이파크 대원샵"),
         ("110-20-28152", "행촌제2주유소"),
         ("130-37-61978", "청해진"),
         ("139-17-01270", "GS25한화리조트설악"),
         ("144-04-03173", "이가네양꼬치/종각직영점"),
         ("152-21-01299", "총각김밥"),
+        ("205-39-03897", "모쿠카츠"),
         ("214-86-08930", "양평휴게서울주유소"),
         ("219-30-43463", "오대산가마솥식당"),
+        ("226-82-67609", "문화재구역주차료"),
         ("227-85-05723", "직염 프라자주유소"),
+        ("227-82-06089", "속초시시설관리공단"),
         ("227-81-20556", "주식회사청초수"),
         ("261-81-16391", "매드포갈릭 D타워점"),
         ("287-87-01999", "오근내닭갈비 인사동점"),
@@ -1723,6 +1727,7 @@ def test_business_number_dictionary_fills_human_anchor_sample_merchants() -> Non
         ("550-19-09550", "GS THE FRESH"),
         ("563-09-02031", "배스킨라빈스 서강신수점"),
         ("716-81-03135", "주식회사속초바베큐338"),
+        ("728-32-00545", "크린에이드 이대역서희스타힐스점"),
         ("808-85-03280", "깐깐"),
     ]
 
@@ -1756,6 +1761,74 @@ def test_candidate_hint_builder_uses_merchant_label_value_on_following_line() ->
     }
 
     assert candidates["merchant_name"] == "청해진"
+
+
+def test_candidate_hint_builder_uses_spaced_merchant_label_value() -> None:
+    lines = [
+        {"block_id": "spaced-merchant-p0-l0", "page_index": 0, "line_order": 0, "text": "가 맹 점 명 : 청해진", "normalized_text": "가 맹 점 명 : 청해진", "confidence": 1.0},
+        {"block_id": "spaced-merchant-p0-l1", "page_index": 0, "line_order": 1, "text": "사업자 130-37-61978", "normalized_text": "사업자 130-37-61978", "confidence": 1.0},
+        {"block_id": "spaced-merchant-p0-l2", "page_index": 0, "line_order": 2, "text": "합계금액 511,000", "normalized_text": "합계금액 511,000", "confidence": 1.0},
+    ]
+
+    candidates = {
+        candidate["candidate_type"]: candidate["normalized_value"]
+        for candidate in build_paddle_candidate_hints_from_safe_lines(lines)
+    }
+
+    assert candidates["merchant_name"] == "청해진"
+
+
+def test_candidate_hint_builder_skips_owner_name_after_spaced_merchant_label() -> None:
+    lines = [
+        {"block_id": "owner-after-label-p0-l0", "page_index": 0, "line_order": 0, "text": "속초시시설관리공단", "normalized_text": "속초시시설관리공단", "confidence": 0.98},
+        {"block_id": "owner-after-label-p0-l1", "page_index": 0, "line_order": 1, "text": "상    호", "normalized_text": "상    호", "confidence": 0.98},
+        {"block_id": "owner-after-label-p0-l2", "page_index": 0, "line_order": 2, "text": ":", "normalized_text": ":", "confidence": 0.98},
+        {"block_id": "owner-after-label-p0-l3", "page_index": 0, "line_order": 3, "text": "이선규", "normalized_text": "이선규", "confidence": 0.98},
+        {"block_id": "owner-after-label-p0-l4", "page_index": 0, "line_order": 4, "text": "대", "normalized_text": "대", "confidence": 0.98},
+        {"block_id": "owner-after-label-p0-l5", "page_index": 0, "line_order": 5, "text": "표", "normalized_text": "표", "confidence": 0.98},
+        {"block_id": "owner-after-label-p0-l6", "page_index": 0, "line_order": 6, "text": "사업자 227-82-06089", "normalized_text": "사업자 227-82-06089", "confidence": 0.98},
+    ]
+
+    candidates = {
+        candidate["candidate_type"]: candidate["normalized_value"]
+        for candidate in build_paddle_candidate_hints_from_safe_lines(lines)
+    }
+
+    assert candidates["merchant_name"] == "속초시시설관리공단"
+    assert candidates["business_number"] == "227-82-06089"
+
+
+def test_candidate_hint_builder_uses_multiline_known_merchant_after_noisy_label_notice() -> None:
+    lines = [
+        {"block_id": "multiline-known-p0-l0", "page_index": 0, "line_order": 0, "text": "가맹점명", "normalized_text": "가맹점명", "confidence": 0.98},
+        {"block_id": "multiline-known-p0-l1", "page_index": 0, "line_order": 1, "text": "실제와", "normalized_text": "실제와", "confidence": 0.98},
+        {"block_id": "multiline-known-p0-l2", "page_index": 0, "line_order": 2, "text": "다른", "normalized_text": "다른", "confidence": 0.98},
+        {"block_id": "multiline-known-p0-l3", "page_index": 0, "line_order": 3, "text": "크린에이드", "normalized_text": "크린에이드", "confidence": 0.98},
+        {"block_id": "multiline-known-p0-l4", "page_index": 0, "line_order": 4, "text": "이대역서희스타힐", "normalized_text": "이대역서희스타힐", "confidence": 0.98},
+        {"block_id": "multiline-known-p0-l5", "page_index": 0, "line_order": 5, "text": "스점", "normalized_text": "스점", "confidence": 0.98},
+    ]
+
+    candidates = {
+        candidate["candidate_type"]: candidate["normalized_value"]
+        for candidate in build_paddle_candidate_hints_from_safe_lines(lines)
+    }
+
+    assert candidates["merchant_name"] == "크린에이드 이대역서희스타힐스점"
+
+
+def test_candidate_hint_builder_uses_known_oilbank_fragment() -> None:
+    lines = [
+        {"block_id": "oilbank-p0-l0", "page_index": 0, "line_order": 0, "text": "동시D현대오일뱅크", "normalized_text": "동시D현대오일뱅크", "confidence": 0.90},
+        {"block_id": "oilbank-p0-l1", "page_index": 0, "line_order": 1, "text": "프라자주유소", "normalized_text": "프라자주유소", "confidence": 0.90},
+        {"block_id": "oilbank-p0-l2", "page_index": 0, "line_order": 2, "text": "합계 50,000", "normalized_text": "합계 50,000", "confidence": 0.98},
+    ]
+
+    candidates = {
+        candidate["candidate_type"]: candidate["normalized_value"]
+        for candidate in build_paddle_candidate_hints_from_safe_lines(lines)
+    }
+
+    assert candidates["merchant_name"] == "현대오일뱅크 프라자주유소"
 
 
 def test_candidate_hint_builder_uses_top_known_merchant_and_rejects_address_fragments() -> None:
@@ -1904,6 +1977,625 @@ def test_candidate_hint_builder_reads_labeled_short_card_approval_date() -> None
     }
 
     assert candidates["transaction_date"] == "2026-05-23"
+
+
+def test_candidate_hint_builder_reads_split_sales_date_label_with_yyyymmdd() -> None:
+    lines = [
+        {"block_id": "sales-date-p0-l0", "page_index": 0, "line_order": 0, "text": "매출일", "normalized_text": "매출일", "confidence": 0.95},
+        {"block_id": "sales-date-p0-l1", "page_index": 0, "line_order": 1, "text": "20260608", "normalized_text": "20260608", "confidence": 0.99},
+        {"block_id": "sales-date-p0-l2", "page_index": 0, "line_order": 2, "text": "승인번호", "normalized_text": "승인번호", "confidence": 0.95},
+    ]
+
+    candidates = {
+        candidate["candidate_type"]: candidate["normalized_value"]
+        for candidate in build_paddle_candidate_hints_from_safe_lines(lines)
+    }
+
+    assert candidates["transaction_date"] == "2026-06-08"
+
+
+def test_candidate_hint_builder_reads_split_merchant_label_after_noise() -> None:
+    lines = [
+        {"block_id": "split-store-p0-l0", "page_index": 0, "line_order": 0, "text": "매장명", "normalized_text": "매장명", "confidence": 0.95},
+        {"block_id": "split-store-p0-l1", "page_index": 0, "line_order": 1, "text": "-", "normalized_text": "-", "confidence": 0.7},
+        {"block_id": "split-store-p0-l2", "page_index": 0, "line_order": 2, "text": "테스트카페 종로점", "normalized_text": "테스트카페 종로점", "confidence": 0.97},
+        {"block_id": "split-store-p0-l3", "page_index": 0, "line_order": 3, "text": "사업자번호 123-45-67891", "normalized_text": "사업자번호 123-45-67891", "confidence": 0.95},
+    ]
+
+    candidates = {
+        candidate["candidate_type"]: candidate["normalized_value"]
+        for candidate in build_paddle_candidate_hints_from_safe_lines(lines)
+    }
+
+    assert candidates["merchant_name"] == "테스트카페 종로점"
+
+
+def test_candidate_hint_builder_uses_same_line_merchant_before_business_number() -> None:
+    lines = [
+        {
+            "block_id": "inline-business-merchant-p0-l0",
+            "page_index": 0,
+            "line_order": 0,
+            "text": "무명분식 / 123-45-67891 / 서울시",
+            "normalized_text": "무명분식 / 123-45-67891 / 서울시",
+            "confidence": 0.98,
+        },
+        {"block_id": "inline-business-merchant-p0-l1", "page_index": 0, "line_order": 1, "text": "합계 8,000", "normalized_text": "합계 8,000", "confidence": 0.98},
+    ]
+
+    candidates = {
+        candidate["candidate_type"]: candidate["normalized_value"]
+        for candidate in build_paddle_candidate_hints_from_safe_lines(lines)
+    }
+
+    assert candidates["business_number"] == "123-45-67891"
+    assert candidates["merchant_name"] == "무명분식"
+
+
+def test_candidate_hint_builder_uses_business_number_dictionary_for_chonggak_kimbap() -> None:
+    lines = [
+        {
+            "block_id": "known-inline-business-p0-l0",
+            "page_index": 0,
+            "line_order": 0,
+            "text": "총각김밥 / 152-21-01299 / 서울 종로",
+            "normalized_text": "총각김밥 / 152-21-01299 / 서울 종로",
+            "confidence": 0.98,
+        },
+    ]
+
+    candidates = {
+        candidate["candidate_type"]: candidate["normalized_value"]
+        for candidate in build_paddle_candidate_hints_from_safe_lines(lines)
+    }
+
+    assert candidates["business_number"] == "152-21-01299"
+    assert candidates["merchant_name"] == "총각김밥"
+
+
+def test_candidate_hint_builder_does_not_use_identifier_before_business_number_as_merchant() -> None:
+    lines = [
+        {
+            "block_id": "identifier-before-business-p0-l0",
+            "page_index": 0,
+            "line_order": 0,
+            "text": "승인번호 20260526 / 123-45-67891",
+            "normalized_text": "승인번호 20260526 / 123-45-67891",
+            "confidence": 0.98,
+        },
+    ]
+
+    candidates = {
+        candidate["candidate_type"]: candidate["normalized_value"]
+        for candidate in build_paddle_candidate_hints_from_safe_lines(lines)
+    }
+
+    assert candidates["business_number"] == "123-45-67891"
+    assert "merchant_name" not in candidates
+
+
+def test_candidate_hint_builder_reads_compact_date_before_approval_time() -> None:
+    lines = [
+        {"block_id": "approval-time-p0-l0", "page_index": 0, "line_order": 0, "text": "승인시간", "normalized_text": "승인시간", "confidence": 0.95},
+        {"block_id": "approval-time-p0-l1", "page_index": 0, "line_order": 1, "text": "20260526", "normalized_text": "20260526", "confidence": 0.99},
+        {"block_id": "approval-time-p0-l2", "page_index": 0, "line_order": 2, "text": "12:53:09", "normalized_text": "12:53:09", "confidence": 0.99},
+    ]
+
+    candidates = {
+        candidate["candidate_type"]: candidate["normalized_value"]
+        for candidate in build_paddle_candidate_hints_from_safe_lines(lines)
+    }
+
+    assert candidates["transaction_date"] == "20260526 12:53:09"
+
+
+def test_candidate_hint_builder_reads_contiguous_compact_approval_datetime() -> None:
+    lines = [
+        {"block_id": "compact-approval-datetime-p0-l0", "page_index": 0, "line_order": 0, "text": "승인일시", "normalized_text": "승인일시", "confidence": 0.95},
+        {"block_id": "compact-approval-datetime-p0-l1", "page_index": 0, "line_order": 1, "text": "20260526125309", "normalized_text": "20260526125309", "confidence": 0.99},
+    ]
+
+    candidates = {
+        candidate["candidate_type"]: candidate["normalized_value"]
+        for candidate in build_paddle_candidate_hints_from_safe_lines(lines)
+    }
+
+    assert candidates["transaction_date"] == "20260526 12:53:09"
+
+
+def test_candidate_hint_builder_uses_merchant_business_owner_line() -> None:
+    lines = [
+        {
+            "block_id": "merchant-owner-line-p0-l0",
+            "page_index": 0,
+            "line_order": 0,
+            "text": "총각김밥 / 152-21-01299 / 박준이",
+            "normalized_text": "총각김밥 / 152-21-01299 / 박준이",
+            "confidence": 0.98,
+        },
+        {"block_id": "merchant-owner-line-p0-l1", "page_index": 0, "line_order": 1, "text": "승인일시", "normalized_text": "승인일시", "confidence": 0.95},
+        {"block_id": "merchant-owner-line-p0-l2", "page_index": 0, "line_order": 2, "text": "20260526125309", "normalized_text": "20260526125309", "confidence": 0.99},
+    ]
+
+    candidates = {
+        candidate["candidate_type"]: candidate["normalized_value"]
+        for candidate in build_paddle_candidate_hints_from_safe_lines(lines)
+    }
+
+    assert candidates["merchant_name"] == "총각김밥"
+    assert candidates["business_number"] == "152-21-01299"
+    assert candidates["transaction_date"] == "20260526 12:53:09"
+
+
+def test_candidate_hint_builder_uses_split_merchant_business_owner_line() -> None:
+    lines = [
+        {
+            "block_id": "split-merchant-owner-line-p0-l0",
+            "page_index": 0,
+            "line_order": 0,
+            "text": "총각김밥 /",
+            "normalized_text": "총각김밥 /",
+            "confidence": 0.98,
+        },
+        {
+            "block_id": "split-merchant-owner-line-p0-l1",
+            "page_index": 0,
+            "line_order": 1,
+            "text": "152-21-01299 / 박준이",
+            "normalized_text": "152-21-01299 / 박준이",
+            "confidence": 0.98,
+        },
+        {"block_id": "split-merchant-owner-line-p0-l2", "page_index": 0, "line_order": 2, "text": "승인일시 :", "normalized_text": "승인일시 :", "confidence": 0.95},
+        {"block_id": "split-merchant-owner-line-p0-l3", "page_index": 0, "line_order": 3, "text": "20260526", "normalized_text": "20260526", "confidence": 0.99},
+        {"block_id": "split-merchant-owner-line-p0-l4", "page_index": 0, "line_order": 4, "text": "12:53:09", "normalized_text": "12:53:09", "confidence": 0.99},
+        {"block_id": "split-merchant-owner-line-p0-l5", "page_index": 0, "line_order": 5, "text": "합계 5,600", "normalized_text": "합계 5,600", "confidence": 0.99},
+    ]
+
+    candidates = {
+        candidate["candidate_type"]: candidate["normalized_value"]
+        for candidate in build_paddle_candidate_hints_from_safe_lines(lines)
+    }
+
+    assert candidates["merchant_name"] == "총각김밥"
+    assert candidates["business_number"] == "152-21-01299"
+    assert candidates["transaction_date"] == "20260526 12:53:09"
+    assert candidates["total_amount"] == "5600"
+
+
+def test_parser_receipt_keeps_split_merchant_business_owner_line() -> None:
+    record = parse_synthetic_case(
+        {
+            "sample_id": "synthetic_split_merchant_business_owner_001",
+            "source_file_name": "synthetic_split_merchant_business_owner_001.jpg",
+            "description": "상호/사업자번호/소유자 구조가 줄 단위로 갈라져도 상호와 날짜를 유지",
+            "paddle_lines": [
+                {"text": "총각김밥 /", "confidence": 0.98},
+                {"text": "152-21-01299 / 박준이", "confidence": 0.98},
+                {"text": "승인일시 :", "confidence": 0.95},
+                {"text": "20260526", "confidence": 0.99},
+                {"text": "12:53:09", "confidence": 0.99},
+                {"text": "합계 5,600", "confidence": 0.99},
+            ],
+            "expected": {
+                "merchant_name": "총각김밥",
+                "business_number": "152-21-01299",
+                "transaction_date": "2026-05-26",
+                "total_amount": 5600,
+                "review_required_expected": True,
+            },
+        }
+    )
+
+    assert record.merchant_name == "총각김밥"
+    assert record.business_number == "152-21-01299"
+    assert record.transaction_date and record.transaction_date.isoformat() == "2026-05-26"
+    assert record.total_amount == 5600
+
+
+def test_parser_prefers_business_anchor_over_short_owner_or_fragment_merchants() -> None:
+    cases = [
+        ("synthetic_owner_anchor_sokcho", "이선규", "227-82-06089", "속초시시설관리공단"),
+        ("synthetic_market_place_anchor_sokcho", "속초관광수산시장", "227-82-06089", "속초시시설관리공단"),
+        ("synthetic_short_fragment_anchor_haengchon", "시0", "110-20-28152", "행촌제2주유소"),
+        ("synthetic_branch_fragment_anchor_lotte", "파주점", "104-81-91189", "롯데 유스컬처빌 파주점"),
+        ("synthetic_parking_owner_anchor", "박동순", "226-82-67609", "문화재구역주차료"),
+    ]
+
+    for sample_id, merchant_candidate, business_number, expected_merchant in cases:
+        record = parse_synthetic_case(
+            {
+                "sample_id": sample_id,
+                "source_file_name": f"{sample_id}.jpg",
+                "paddle_lines": [
+                    {"text": merchant_candidate, "confidence": 0.98},
+                    {"text": f"사업자 {business_number}", "confidence": 0.98},
+                    {"text": "합계 10,000", "confidence": 0.98},
+                ],
+                "expected": {
+                    "merchant_name": expected_merchant,
+                    "business_number": business_number,
+                    "total_amount": 10000,
+                    "review_required_expected": True,
+                },
+            }
+        )
+
+        assert record.merchant_name == expected_merchant
+        assert record.business_number == business_number
+
+
+def test_parser_keeps_labeled_total_when_legacy_paid_amount_is_long_identifier() -> None:
+    record = parse_synthetic_case(
+        {
+            "sample_id": "synthetic_total_not_replaced_by_long_identifier_001",
+            "source_file_name": "synthetic_total_not_replaced_by_long_identifier_001.jpg",
+            "paddle_lines": [
+                {"text": "이가네양꼬치/종각직영점", "confidence": 0.98},
+                {"text": "사업자 144-04-03173", "confidence": 0.98},
+                {"text": "합 계 금 액 170,000", "confidence": 0.98},
+                {"text": "카드결제 170000775", "confidence": 0.80},
+            ],
+            "expected": {
+                "merchant_name": "이가네양꼬치/종각직영점",
+                "business_number": "144-04-03173",
+                "total_amount": 170000,
+                "review_required_expected": True,
+            },
+        }
+    )
+
+    assert record.merchant_name == "이가네양꼬치/종각직영점"
+    assert record.total_amount == 170000
+    assert "paid_amount_identifier_candidate_ignored" in record.amount_warnings
+
+
+def test_candidate_hint_builder_reads_app_receipt_short_labeled_date_and_split_amount() -> None:
+    lines = [
+        {"block_id": "app-short-p0-l0", "page_index": 0, "line_order": 0, "text": "영수증", "normalized_text": "영수증", "confidence": 0.98},
+        {"block_id": "app-short-p0-l1", "page_index": 0, "line_order": 1, "text": "결제", "normalized_text": "결제", "confidence": 0.98},
+        {"block_id": "app-short-p0-l2", "page_index": 0, "line_order": 2, "text": "취소", "normalized_text": "취소", "confidence": 0.98},
+        {"block_id": "app-short-p0-l3", "page_index": 0, "line_order": 3, "text": "하나로마트서강점", "normalized_text": "하나로마트서강점", "confidence": 0.98},
+        {"block_id": "app-short-p0-l4", "page_index": 0, "line_order": 4, "text": "날짜:", "normalized_text": "날짜:", "confidence": 0.98},
+        {"block_id": "app-short-p0-l5", "page_index": 0, "line_order": 5, "text": "202659", "normalized_text": "202659", "confidence": 0.98},
+        {"block_id": "app-short-p0-l6", "page_index": 0, "line_order": 6, "text": "오후", "normalized_text": "오후", "confidence": 0.98},
+        {"block_id": "app-short-p0-l7", "page_index": 0, "line_order": 7, "text": "5:28:37", "normalized_text": "5:28:37", "confidence": 0.98},
+        {"block_id": "app-short-p0-l8", "page_index": 0, "line_order": 8, "text": "금액:", "normalized_text": "금액:", "confidence": 0.98},
+        {"block_id": "app-short-p0-l9", "page_index": 0, "line_order": 9, "text": "W81", "normalized_text": "W81", "confidence": 0.98},
+        {"block_id": "app-short-p0-l10", "page_index": 0, "line_order": 10, "text": "1920", "normalized_text": "1920", "confidence": 0.98},
+    ]
+
+    candidates = {candidate["candidate_type"]: candidate["value"] for candidate in build_paddle_candidate_hints_from_safe_lines(lines)}
+
+    assert candidates["merchant_name"] == "하나로마트서강점"
+    assert candidates["transaction_date"] == "2026-05-09"
+    assert candidates["total_amount"] == "81920"
+
+
+def test_parser_receipt_reads_app_receipt_short_labeled_date_and_split_amount() -> None:
+    case = {
+        "sample_id": "synthetic_app_receipt_short_labeled_date_001",
+        "source_file_name": "synthetic_app_receipt_short_labeled_date_001.jpg",
+        "paddle_lines": [
+            {"text": "영수증", "confidence": 0.98},
+            {"text": "결제", "confidence": 0.98},
+            {"text": "취소", "confidence": 0.98},
+            {"text": "하나로마트서강점", "confidence": 0.98},
+            {"text": "날짜:", "confidence": 0.98},
+            {"text": "202659", "confidence": 0.98},
+            {"text": "오후", "confidence": 0.98},
+            {"text": "5:28:37", "confidence": 0.98},
+            {"text": "금액:", "confidence": 0.98},
+            {"text": "W81", "confidence": 0.98},
+            {"text": "1920", "confidence": 0.98},
+        ],
+        "expected": {
+            "merchant_name": "하나로마트서강점",
+            "transaction_date": "2026-05-09",
+            "total_amount": 81920,
+        },
+    }
+
+    record = parse_synthetic_case(case)
+
+    assert record.merchant_name == "하나로마트서강점"
+    assert record.transaction_date and record.transaction_date.isoformat() == "2026-05-09"
+    assert record.total_amount == 81920
+
+
+def test_candidate_hint_builder_reads_app_payment_info_center_merchant() -> None:
+    lines = [
+        {"block_id": "app-info-p0-l0", "page_index": 0, "line_order": 0, "text": "결제", "normalized_text": "결제", "confidence": 0.98},
+        {"block_id": "app-info-p0-l1", "page_index": 0, "line_order": 1, "text": "정보", "normalized_text": "정보", "confidence": 0.98},
+        {"block_id": "app-info-p0-l2", "page_index": 0, "line_order": 2, "text": "카테고리", "normalized_text": "카테고리", "confidence": 0.98},
+        {"block_id": "app-info-p0-l3", "page_index": 0, "line_order": 3, "text": "미지정", "normalized_text": "미지정", "confidence": 0.98},
+        {"block_id": "app-info-p0-l4", "page_index": 0, "line_order": 4, "text": "모쿠", "normalized_text": "모쿠", "confidence": 0.98},
+        {"block_id": "app-info-p0-l5", "page_index": 0, "line_order": 5, "text": "결제 날짜 및 시간:", "normalized_text": "결제 날짜 및 시간:", "confidence": 0.98},
+        {"block_id": "app-info-p0-l6", "page_index": 0, "line_order": 6, "text": "2026.04.27. 오후 09:30", "normalized_text": "2026.04.27. 오후 09:30", "confidence": 0.98},
+        {"block_id": "app-info-p0-l7", "page_index": 0, "line_order": 7, "text": "총액:", "normalized_text": "총액:", "confidence": 0.98},
+        {"block_id": "app-info-p0-l8", "page_index": 0, "line_order": 8, "text": "81,500원", "normalized_text": "81,500원", "confidence": 0.98},
+    ]
+
+    candidates = {candidate["candidate_type"]: candidate["value"] for candidate in build_paddle_candidate_hints_from_safe_lines(lines)}
+
+    assert candidates["merchant_name"] == "모쿠"
+    assert candidates["transaction_date"] == "2026-04-27"
+    assert candidates["total_amount"] == "81500"
+
+
+def test_candidate_hint_builder_does_not_guess_merchant_from_single_app_marker() -> None:
+    lines = [
+        {"block_id": "single-marker-p0-l0", "page_index": 0, "line_order": 0, "text": "영수증", "normalized_text": "영수증", "confidence": 0.98},
+        {"block_id": "single-marker-p0-l1", "page_index": 0, "line_order": 1, "text": "일반 안내문", "normalized_text": "일반 안내문", "confidence": 0.98},
+        {"block_id": "single-marker-p0-l2", "page_index": 0, "line_order": 2, "text": "이벤트", "normalized_text": "이벤트", "confidence": 0.98},
+        {"block_id": "single-marker-p0-l3", "page_index": 0, "line_order": 3, "text": "단가 수량", "normalized_text": "단가 수량", "confidence": 0.98},
+        {"block_id": "single-marker-p0-l4", "page_index": 0, "line_order": 4, "text": "금액", "normalized_text": "금액", "confidence": 0.98},
+        {"block_id": "single-marker-p0-l5", "page_index": 0, "line_order": 5, "text": "5,000", "normalized_text": "5,000", "confidence": 0.98},
+    ]
+
+    candidates = {candidate["candidate_type"]: candidate["value"] for candidate in build_paddle_candidate_hints_from_safe_lines(lines)}
+
+    assert "merchant_name" not in candidates
+
+
+def test_candidate_hint_builder_reads_split_total_label_amount_before_receipt_number() -> None:
+    lines = [
+        {"block_id": "split-total-p0-l0", "page_index": 0, "line_order": 0, "text": "영수증 # 20260512", "normalized_text": "영수증 # 20260512", "confidence": 0.98},
+        {"block_id": "split-total-p0-l1", "page_index": 0, "line_order": 1, "text": "10047", "normalized_text": "10047", "confidence": 0.98},
+        {"block_id": "split-total-p0-l2", "page_index": 0, "line_order": 2, "text": "합계", "normalized_text": "합계", "confidence": 0.98},
+        {"block_id": "split-total-p0-l3", "page_index": 0, "line_order": 3, "text": "금액", "normalized_text": "금액", "confidence": 0.98},
+        {"block_id": "split-total-p0-l4", "page_index": 0, "line_order": 4, "text": "15", "normalized_text": "15", "confidence": 0.98},
+        {"block_id": "split-total-p0-l5", "page_index": 0, "line_order": 5, "text": "000", "normalized_text": "000", "confidence": 0.98},
+        {"block_id": "split-total-p0-l6", "page_index": 0, "line_order": 6, "text": "승인금액:15000", "normalized_text": "승인금액:15000", "confidence": 0.98},
+    ]
+
+    candidates = {candidate["candidate_type"]: candidate["value"] for candidate in build_paddle_candidate_hints_from_safe_lines(lines)}
+
+    assert candidates["total_amount"] == "15000"
+    assert candidates["final_amount"] == "15000"
+
+
+def test_standard_context_uses_dailyfix_business_number_anchor_only_when_identifier_present() -> None:
+    record = parse_synthetic_case(
+        {
+            "sample_id": "synthetic_dailyfix_business_anchor_001",
+            "source_file_name": "synthetic_dailyfix_business_anchor_001.jpg",
+            "paddle_lines": [
+                {"text": "데일링픽스", "confidence": 0.90},
+                {"text": "1798502903", "confidence": 0.98},
+                {"text": "합계", "confidence": 0.98},
+                {"text": "금액", "confidence": 0.98},
+                {"text": "15", "confidence": 0.98},
+                {"text": "000", "confidence": 0.98},
+                {"text": "일시: 2026-05-12", "confidence": 0.98},
+            ],
+            "expected": {
+                "merchant_name": "데일리픽스 을지로",
+                "business_number": "179-85-02903",
+                "transaction_date": "2026-05-12",
+                "total_amount": 15000,
+                "review_required_expected": True,
+            },
+        }
+    )
+
+    assert record.merchant_name == "데일리픽스 을지로"
+    assert record.business_number == "179-85-02903"
+    assert record.total_amount == 15000
+
+
+def test_candidate_hint_builder_reads_card_sales_total_adjacent_amount() -> None:
+    lines = [
+        {"block_id": "card-sales-p0-l0", "page_index": 0, "line_order": 0, "text": "평양고깃집", "normalized_text": "평양고깃집", "confidence": 0.98},
+        {"block_id": "card-sales-p0-l1", "page_index": 0, "line_order": 1, "text": "384-11-02561", "normalized_text": "384-11-02561", "confidence": 0.98},
+        {"block_id": "card-sales-p0-l2", "page_index": 0, "line_order": 2, "text": "2026-05-10", "normalized_text": "2026-05-10", "confidence": 0.98},
+        {"block_id": "card-sales-p0-l3", "page_index": 0, "line_order": 3, "text": "45000", "normalized_text": "45000", "confidence": 0.98},
+        {"block_id": "card-sales-p0-l4", "page_index": 0, "line_order": 4, "text": "매출합계카드", "normalized_text": "매출합계카드", "confidence": 0.98},
+    ]
+
+    candidates = {candidate["candidate_type"]: candidate["value"] for candidate in build_paddle_candidate_hints_from_safe_lines(lines)}
+
+    assert candidates["merchant_name"] == "평양고깃집"
+    assert candidates["transaction_date"] == "2026-05-10"
+    assert candidates["business_number"] == "384-11-02561"
+    assert candidates["total_amount"] == "45000"
+
+
+def test_candidate_hint_builder_recovers_noisy_embedded_approval_datetime() -> None:
+    lines = [
+        {"block_id": "noisy-datetime-p0-l0", "page_index": 0, "line_order": 0, "text": "승", "normalized_text": "승", "confidence": 0.96},
+        {"block_id": "noisy-datetime-p0-l1", "page_index": 0, "line_order": 1, "text": "인", "normalized_text": "인", "confidence": 0.96},
+        {"block_id": "noisy-datetime-p0-l2", "page_index": 0, "line_order": 2, "text": "간", "normalized_text": "간", "confidence": 0.96},
+        {
+            "block_id": "noisy-datetime-p0-l3",
+            "page_index": 0,
+            "line_order": 3,
+            "text": "N9260525085745208437",
+            "normalized_text": "N9260525085745208437",
+            "confidence": 0.93,
+        },
+    ]
+
+    candidates = {
+        candidate["candidate_type"]: candidate["normalized_value"]
+        for candidate in build_paddle_candidate_hints_from_safe_lines(lines)
+    }
+
+    assert candidates["transaction_date"] == "20260525 08:57:45"
+
+
+def test_candidate_hint_builder_recovers_split_tax_total_missing_zero() -> None:
+    lines = [
+        {"block_id": "split-tax-p0-l0", "page_index": 0, "line_order": 0, "text": "비씨카드", "normalized_text": "비씨카드", "confidence": 0.97},
+        {"block_id": "split-tax-p0-l1", "page_index": 0, "line_order": 1, "text": "272원", "normalized_text": "272원", "confidence": 0.96},
+        {"block_id": "split-tax-p0-l2", "page_index": 0, "line_order": 2, "text": "657", "normalized_text": "657", "confidence": 0.96},
+        {"block_id": "split-tax-p0-l3", "page_index": 0, "line_order": 3, "text": "728원", "normalized_text": "728원", "confidence": 0.96},
+        {"block_id": "split-tax-p0-l4", "page_index": 0, "line_order": 4, "text": "65", "normalized_text": "65", "confidence": 0.96},
+        {"block_id": "split-tax-p0-l5", "page_index": 0, "line_order": 5, "text": "72300원", "normalized_text": "72300원", "confidence": 0.96},
+    ]
+
+    candidates = {
+        candidate["candidate_type"]: candidate["normalized_value"]
+        for candidate in build_paddle_candidate_hints_from_safe_lines(lines)
+    }
+
+    assert candidates["supply_amount"] == "657272"
+    assert candidates["vat_amount"] == "65728"
+    assert candidates["total_amount"] == "723000"
+    assert candidates["final_amount"] == "723000"
+
+
+def test_candidate_hint_builder_normalizes_noisy_labeled_known_merchant() -> None:
+    lines = [
+        {
+            "block_id": "noisy-known-merchant-p0-l0",
+            "page_index": 0,
+            "line_order": 0,
+            "text": "상호명 어스즈 플레이월드 파주점 STO",
+            "normalized_text": "상호명 어스즈 플레이월드 파주점 STO",
+            "confidence": 0.98,
+        },
+    ]
+
+    candidates = {
+        candidate["candidate_type"]: candidate["normalized_value"]
+        for candidate in build_paddle_candidate_hints_from_safe_lines(lines)
+    }
+
+    assert candidates["merchant_name"] == "플레이월드 파주점"
+
+
+def test_standard_context_normalizes_noisy_known_merchant_without_business_number() -> None:
+    record = parse_synthetic_case(
+        {
+            "sample_id": "synthetic_noisy_known_merchant_name_001",
+            "source_file_name": "synthetic_noisy_known_merchant_name_001.jpg",
+            "description": "라벨 상호에 OCR 노이즈가 붙어도 known merchant anchor로 정리",
+            "paddle_lines": [
+                {"text": "상호명 어스즈 플레이월드 파주점 STO", "confidence": 0.98},
+                {"text": "출력일시 : 2026-06-06 11:01:24", "confidence": 0.98},
+                {"text": "합계금액 61,000", "confidence": 0.99},
+            ],
+            "expected": {
+                "merchant_name": "플레이월드 파주점",
+                "transaction_date": "2026-06-06",
+                "total_amount": 61000,
+                "final_amount": 61000,
+                "review_required_expected": True,
+            },
+        }
+    )
+
+    assert record.merchant_name == "플레이월드 파주점"
+
+
+def test_candidate_hint_builder_does_not_read_approval_number_as_compact_date() -> None:
+    lines = [
+        {"block_id": "approval-number-date-p0-l0", "page_index": 0, "line_order": 0, "text": "승인번호", "normalized_text": "승인번호", "confidence": 0.95},
+        {"block_id": "approval-number-date-p0-l1", "page_index": 0, "line_order": 1, "text": "202605260001", "normalized_text": "202605260001", "confidence": 0.99},
+        {"block_id": "approval-number-date-p0-l2", "page_index": 0, "line_order": 2, "text": "합계 5,000", "normalized_text": "합계 5,000", "confidence": 0.99},
+    ]
+
+    candidates = {
+        candidate["candidate_type"]: candidate["normalized_value"]
+        for candidate in build_paddle_candidate_hints_from_safe_lines(lines)
+    }
+
+    assert "transaction_date" not in candidates
+
+
+def test_candidate_hint_builder_extracts_livestock_distribution_merchant_near_business_number() -> None:
+    lines = [
+        {"block_id": "livestock-p0-l0", "page_index": 0, "line_order": 0, "text": "정선축산유통", "normalized_text": "정선축산유통", "confidence": 0.98},
+        {"block_id": "livestock-p0-l1", "page_index": 0, "line_order": 1, "text": "사업자번호 206-85-10228", "normalized_text": "사업자번호 206-85-10228", "confidence": 0.98},
+        {"block_id": "livestock-p0-l2", "page_index": 0, "line_order": 2, "text": "승인일시 20260526152446", "normalized_text": "승인일시 20260526152446", "confidence": 0.98},
+        {"block_id": "livestock-p0-l3", "page_index": 0, "line_order": 3, "text": "승인번호 73297759", "normalized_text": "승인번호 73297759", "confidence": 0.98},
+        {"block_id": "livestock-p0-l4", "page_index": 0, "line_order": 4, "text": "합계 107,000", "normalized_text": "합계 107,000", "confidence": 0.99},
+    ]
+
+    candidates = {
+        candidate["candidate_type"]: candidate["normalized_value"]
+        for candidate in build_paddle_candidate_hints_from_safe_lines(lines)
+    }
+
+    assert candidates["merchant_name"] == "정선축산유통"
+    assert candidates["transaction_date"] == "20260526 15:24:46"
+    assert candidates["approval_number"] == "73297759"
+    assert candidates["total_amount"] == "107000"
+
+
+def test_parser_receipt_keeps_livestock_distribution_merchant_and_approval_number() -> None:
+    record = parse_synthetic_case(
+        {
+            "sample_id": "synthetic_livestock_distribution_approval_001",
+            "source_file_name": "synthetic_livestock_distribution_approval_001.jpg",
+            "description": "사업자번호 주변 상호와 승인번호를 보수적으로 복원",
+            "paddle_lines": [
+                {"text": "정선축산유통", "confidence": 0.98},
+                {"text": "사업자번호 206-85-10228", "confidence": 0.98},
+                {"text": "승인일시 20260526152446", "confidence": 0.98},
+                {"text": "승인번호 73297759", "confidence": 0.98},
+                {"text": "합계 107,000", "confidence": 0.99},
+            ],
+            "expected": {
+                "merchant_name": "정선축산유통",
+                "transaction_date": "2026-05-26",
+                "approval_number": "73297759",
+                "total_amount": 107000,
+                "review_required_expected": True,
+            },
+        }
+    )
+
+    assert record.merchant_name == "정선축산유통"
+    assert record.transaction_date and record.transaction_date.isoformat() == "2026-05-26"
+    assert record.approval_number == "73297759"
+    assert record.total_amount == 107000
+
+
+def test_candidate_hint_builder_extracts_split_approval_number_without_using_it_as_date() -> None:
+    lines = [
+        {"block_id": "approval-split-p0-l0", "page_index": 0, "line_order": 0, "text": "승인일시", "normalized_text": "승인일시", "confidence": 0.98},
+        {"block_id": "approval-split-p0-l1", "page_index": 0, "line_order": 1, "text": "20260526125309", "normalized_text": "20260526125309", "confidence": 0.98},
+        {"block_id": "approval-split-p0-l2", "page_index": 0, "line_order": 2, "text": "승인번호", "normalized_text": "승인번호", "confidence": 0.98},
+        {"block_id": "approval-split-p0-l3", "page_index": 0, "line_order": 3, "text": "202605252085745", "normalized_text": "202605252085745", "confidence": 0.98},
+        {"block_id": "approval-split-p0-l4", "page_index": 0, "line_order": 4, "text": "합계 5,600", "normalized_text": "합계 5,600", "confidence": 0.99},
+    ]
+
+    candidates = {
+        candidate["candidate_type"]: candidate["normalized_value"]
+        for candidate in build_paddle_candidate_hints_from_safe_lines(lines)
+    }
+
+    assert candidates["transaction_date"] == "20260526 12:53:09"
+    assert candidates["approval_number"] == "202605252085745"
+    assert candidates["total_amount"] == "5600"
+
+
+def test_parser_receipt_keeps_split_contiguous_datetime_and_approval_number() -> None:
+    record = parse_synthetic_case(
+        {
+            "sample_id": "synthetic_split_contiguous_datetime_approval_001",
+            "source_file_name": "synthetic_split_contiguous_datetime_approval_001.jpg",
+            "description": "분리된 승인일시 라벨과 긴 승인번호를 별도 후보로 유지",
+            "paddle_lines": [
+                {"text": "승인일시", "confidence": 0.98},
+                {"text": "20260526125309", "confidence": 0.98},
+                {"text": "승인번호", "confidence": 0.98},
+                {"text": "202605252085745", "confidence": 0.98},
+                {"text": "합계 5,600", "confidence": 0.99},
+            ],
+            "expected": {
+                "transaction_date": "2026-05-26",
+                "approval_number": "202605252085745",
+                "total_amount": 5600,
+                "review_required_expected": True,
+            },
+        }
+    )
+
+    assert record.transaction_date and record.transaction_date.isoformat() == "2026-05-26"
+    assert record.approval_number == "202605252085745"
+    assert record.total_amount == 5600
 
 
 def test_candidate_hint_builder_does_not_use_address_fragment_as_known_merchant() -> None:

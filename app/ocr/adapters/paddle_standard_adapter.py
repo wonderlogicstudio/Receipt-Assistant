@@ -76,6 +76,26 @@ class PaddleStandardOCRAdapter:
             "has_gpu": bool(payload.get("has_gpu", False)),
             "input_type": _string(payload.get("input_type")) or "image",
         }
+        runtime_provider = _safe_token(payload.get("provider"))
+        if runtime_provider:
+            provider_fields["provider"] = runtime_provider
+        device = _safe_token(payload.get("device"))
+        if device:
+            provider_fields["device"] = device
+        if "cuda_compiled" in payload:
+            provider_fields["cuda_compiled"] = payload.get("cuda_compiled")
+        image_extension = _safe_extension(payload.get("image_extension"))
+        if image_extension:
+            provider_fields["image_extension"] = image_extension
+        for key in ("init_elapsed_ms", "ocr_elapsed_ms", "total_elapsed_ms"):
+            if key in payload:
+                provider_fields[key] = _non_negative_int(payload.get(key))
+        runtime_status = _safe_token(payload.get("runtime_status"))
+        if runtime_status:
+            provider_fields["status"] = runtime_status
+        runtime_diagnostic_code = _safe_token(payload.get("runtime_diagnostic_code"))
+        if runtime_diagnostic_code:
+            provider_fields["diagnostic_code"] = runtime_diagnostic_code
         diagnostic_detail_code = _string(payload.get("diagnostic_detail_code"))
         if diagnostic_detail_code:
             provider_fields["diagnostic_detail_code"] = diagnostic_detail_code
@@ -250,6 +270,31 @@ def _string(value: Any) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _safe_token(value: Any) -> str | None:
+    text = _string(value)
+    if not text:
+        return None
+    text = "".join(char if char.isalnum() or char in {"_", "-", ":", "."} else "_" for char in text.lower())
+    return text[:80] or None
+
+
+def _safe_extension(value: Any) -> str | None:
+    text = _string(value)
+    if not text:
+        return None
+    text = text.lower()
+    if not text.startswith("."):
+        text = f".{text}"
+    if len(text) <= 9 and text[1:].isalnum():
+        return text
+    return None
+
+
+def _non_negative_int(value: Any) -> int:
+    number = _int(value, default=0)
+    return number if number >= 0 else 0
 
 
 def _int(value: Any, default: int = 0) -> int:

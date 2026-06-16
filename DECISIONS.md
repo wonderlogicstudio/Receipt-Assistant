@@ -600,3 +600,29 @@ Rollback or correction is required if speed work changes parsed fields,
 candidate hints, review status/reasons, validation warnings, default provider
 selection, ExcelExporter output, Processing History schema, or raw-data exposure
 rules.
+
+---
+
+## ADR-042: Review source preview stays inside upload boundaries
+
+Status: Accepted
+
+Decision:
+The review screen may show an original receipt preview for the selected row, but
+the file must be resolved from `stored_relative_path` under the configured upload
+root. Full local paths are not shown.
+
+Reason:
+Reviewers need to compare OCR/parser results with the original image quickly, but
+the UI must not become a generic local file browser or expose private path data.
+
+Impact:
+JPG/JPEG/PNG files can be shown with `st.image`; PDF files show a safe notice.
+The selected receipt id and row number are stored in session state so reviewers
+can move through rows consistently.
+
+Guardrails:
+Preview must block absolute paths, traversal paths, and files outside
+`data/uploads`. It must not display OCR raw text, provider raw JSON, provider raw
+output, full local paths, endpoint URLs, secrets, raw tracebacks, customer test
+files, or sensitive raw values.

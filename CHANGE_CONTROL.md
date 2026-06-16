@@ -369,3 +369,62 @@ Rollback or correction is required if any of the following occur:
 - Default provider behavior, ExcelExporter sheets/columns, Processing History
   schema, automatic Azure fallback, formal scoring, or PDF PaddleOCR handling
   changes.
+
+## Review UI Receipt Source Preview Change Control
+
+Review source preview may help reviewers compare parsed fields with the original
+receipt file, but it must stay inside the safe upload boundary and must not alter
+export or history contracts.
+
+Allowed changes:
+
+- Add review priority, missing-field, review-reason summary, source file name,
+  and source-preview status columns.
+- Store selected receipt id and selected row number in session state.
+- Highlight the selected row in a read-only selection table.
+- Preview JPG/JPEG/PNG files only after resolving them under the configured
+  upload root.
+- Show a PDF notice instead of forcing PDF rendering.
+
+Rollback or correction is required if any of the following occur:
+
+- The UI displays full local paths, OCR raw text, provider raw JSON, raw provider
+  output, endpoint URLs, secrets, raw tracebacks, or sensitive raw values.
+- Source preview can open files outside `data/uploads` or accepts traversal
+  paths.
+- Review edits, exclusion handling, ExcelExporter sheets/columns, Processing
+  History schema, default provider behavior, automatic fallback, or formal score
+  behavior changes.
+- The change adds mobile/PWA features, OCR provider changes, PaddleOCR accuracy
+  changes, OpenAI correction, or customer test files.
+
+## PaddleOCR Split Label Quality Hardening Change Control
+
+PaddleOCR parser-quality hardening may add conservative label-based candidate
+rules when a synthetic fixture demonstrates a missing field that is visibly
+present on a receipt.
+
+Allowed changes:
+
+- Recognize split `매출일`/`매출일자` label-value date lines when the nearby value is
+  a valid `YYYYMMDD` or short labeled date.
+- Recognize split `매장명` label-value merchant lines only after an explicit
+  merchant label and only when the nearby value is not a date, amount, business
+  number, phone number, card number, or known non-merchant label.
+- Recognize unlabeled merchant segments immediately before a valid business
+  number only when the segment passes merchant-like checks and is not an
+  identifier, address, amount, date, phone, card, approval, tax, or total label.
+- Recognize compact `YYYYMMDD HH:MM[:SS]` approval date-time patterns only with
+  nearby date/time labels such as `승인시간`, `승인일시`, `거래일시`, or `매출일`.
+- Add synthetic sanitized PaddleOCR fixture cases and unit tests only.
+
+Rollback or correction is required if any of the following occur:
+
+- Merchant names are guessed from arbitrary unlabeled lines.
+- Dates are inferred from unrelated identifiers, approval numbers, or invalid
+  calendar values.
+- Actual customer images, full OCR text, provider raw output, raw JSON, full
+  local paths, secrets, or endpoint URLs are added to fixtures, logs, UI, DB, or
+  Excel output.
+- Default pytest runs real Azure or real PaddleOCR, downloads OCR models, or
+  requires `paddleocr`.

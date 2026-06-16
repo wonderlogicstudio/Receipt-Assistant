@@ -1,14 +1,19 @@
 from datetime import datetime
 
 from app.ocr.mock_provider import MockOCRProvider
+from app.ocr.adapters.paddle_standard_adapter import PaddleStandardOCRAdapter
+from app.ocr.paddle_provider import build_paddle_candidate_hints_from_safe_lines
+from app.ocr.provider_factory import get_ocr_provider
 from app.parser.receipt_parser import ReceiptParser
 from app.storage.file_store import StoredFileMetadata
 from app.core.ocr_models import OCRResult
 from app.core.standard_ocr import StandardOCRKeyValueCandidate, StandardOCRResult, StandardOCRTextBlock
 from app.ui.streamlit_app import (
     PREVIEW_COLUMNS,
+    build_paddle_gpu_diagnostic_rows,
     build_runtime_ocr_config,
     format_ocr_diagnostic,
+    is_paddle_runtime_provider,
     process_receipt_files_with_mock_ocr,
     receipts_to_preview_dataframe,
     resolve_runtime_ocr_provider_name,
@@ -69,6 +74,7 @@ def test_should_disable_process_button_when_empty_or_processing():
     assert should_disable_process_button(None, is_processing=False) is True
     assert should_disable_process_button([object()], is_processing=True) is True
     assert should_disable_process_button([object()], is_processing=False) is False
+    assert should_disable_process_button([object()], is_processing=False, runtime_blocked=True) is True
 
 
 def test_runtime_ocr_provider_selection_resolves_current_or_safe_override(monkeypatch):
@@ -83,6 +89,79 @@ def test_runtime_ocr_provider_selection_resolves_current_or_safe_override(monkey
     config = build_runtime_ocr_config("mock")
 
     assert config.ocr_provider == "mock"
+
+
+def test_paddle_gpu_option_is_only_for_paddle_provider():
+    assert is_paddle_runtime_provider("paddle") is True
+    assert is_paddle_runtime_provider("paddleocr") is True
+    assert is_paddle_runtime_provider("mock") is False
+    assert is_paddle_runtime_provider("azure") is False
+    assert is_paddle_runtime_provider(None) is False
+
+
+def test_runtime_paddle_gpu_default_config_stays_cpu(monkeypatch):
+    monkeypatch.setenv("OCR_PROVIDER", "mock")
+    monkeypatch.delenv("PADDLE_USE_GPU", raising=False)
+
+    config = build_runtime_ocr_config("paddle")
+
+    assert config.ocr_provider == "paddle"
+    assert config.paddle_use_gpu is False
+
+
+def test_runtime_paddle_gpu_true_is_passed_to_provider(monkeypatch):
+    monkeypatch.setenv("OCR_PROVIDER", "mock")
+
+    config = build_runtime_ocr_config("paddle", paddle_use_gpu=True)
+    provider = get_ocr_provider(config)
+
+    assert config.ocr_provider == "paddle"
+    assert config.paddle_use_gpu is True
+    assert getattr(provider, "use_gpu") is True
+
+
+def test_runtime_paddle_gpu_false_is_passed_to_provider(monkeypatch):
+    monkeypatch.setenv("OCR_PROVIDER", "mock")
+    monkeypatch.setenv("PADDLE_USE_GPU", "true")
+
+    config = build_runtime_ocr_config("paddle", paddle_use_gpu=False)
+    provider = get_ocr_provider(config)
+
+    assert config.ocr_provider == "paddle"
+    assert config.paddle_use_gpu is False
+    assert getattr(provider, "use_gpu") is False
+
+
+def test_runtime_paddle_gpu_override_does_not_affect_non_paddle_provider(monkeypatch):
+    monkeypatch.setenv("OCR_PROVIDER", "mock")
+
+    config = build_runtime_ocr_config("azure", paddle_use_gpu=True)
+
+    assert config.ocr_provider == "azure"
+    assert config.paddle_use_gpu is False
+
+
+def test_paddle_gpu_diagnostic_rows_are_safe():
+    rows = build_paddle_gpu_diagnostic_rows(
+        {
+            "cuda_compiled": False,
+            "device": r"C:\private\receipt.jpg",
+            "diagnostic_code": "hidden",
+        },
+        gpu_requested=True,
+    )
+    rendered = " ".join(f"{label}={value}" for label, value in rows)
+
+    assert rows == [
+        ("gpu_requested", True),
+        ("cuda_compiled", False),
+        ("device", "c_private_receipt_jpg"),
+    ]
+    assert "raw_text" not in rendered
+    assert "raw_json" not in rendered
+    assert "traceback" not in rendered
+    assert "C:\\" not in rendered
+    assert "private\\receipt" not in rendered
 
 
 def test_process_receipt_files_accepts_standard_ocr_provider_result():
@@ -105,11 +184,203 @@ def test_process_receipt_files_accepts_standard_ocr_provider_result():
     receipt = result.receipt_records[0]
     assert receipt.ocr_provider == "paddleocr"
     assert receipt.source_file_name == "paddle_receipt.jpg"
+    assert receipt.stored_relative_path == "data/uploads/session/paddle_receipt.jpg"
     assert receipt.merchant_name == "테스트카페"
     assert receipt.transaction_date and receipt.transaction_date.isoformat() == "2026-06-10"
     assert receipt.total_amount == 12000
     assert "private" not in receipt.source_file_name
     assert isinstance(result.ocr_results[0], StandardOCRResult)
+
+
+def test_process_receipt_files_applies_noisy_known_merchant_normalization():
+    metadata = StoredFileMetadata(
+        original_file_name="playworld.jpg",
+        stored_file_name="playworld.jpg",
+        stored_relative_path="data/uploads/session/playworld.jpg",
+        file_extension=".jpg",
+        file_size_bytes=10,
+        session_id="session",
+    )
+
+    result = process_receipt_files_with_mock_ocr(
+        [metadata],
+        ocr_provider=FakePaddleLineProvider(
+            [
+                "상호명 어스즈 플레이월드 파주점 STO",
+                "사업자번호: 503-33-22495",
+                "출력일시 : 2026-06-06 11:01:24",
+                "합계금액 61,000",
+            ]
+        ),
+    )
+
+    assert not result.errors
+    receipt = result.receipt_records[0]
+    assert receipt.merchant_name == "플레이월드 파주점"
+    assert receipt.business_number == "503-33-22495"
+    assert receipt.transaction_date and receipt.transaction_date.isoformat() == "2026-06-06"
+    assert receipt.total_amount == 61000
+
+
+def test_process_receipt_files_normalizes_noisy_known_merchant_without_candidates():
+    metadata = StoredFileMetadata(
+        original_file_name="playworld_no_candidates.jpg",
+        stored_file_name="playworld_no_candidates.jpg",
+        stored_relative_path="data/uploads/session/playworld_no_candidates.jpg",
+        file_extension=".jpg",
+        file_size_bytes=10,
+        session_id="session",
+    )
+
+    result = process_receipt_files_with_mock_ocr(
+        [metadata],
+        ocr_provider=FakeTextOnlyStandardProvider(
+            [
+                "상호명 어스즈 플레이월드 파주점 STO",
+                "출력일시 : 2026-06-06 11:01:24",
+                "합계금액 61,000",
+            ]
+        ),
+    )
+
+    assert not result.errors
+    receipt = result.receipt_records[0]
+    assert receipt.merchant_name == "플레이월드 파주점"
+    assert receipt.transaction_date and receipt.transaction_date.isoformat() == "2026-06-06"
+    assert receipt.total_amount == 61000
+
+
+def test_process_receipt_files_applies_owner_line_merchant_and_compact_datetime():
+    metadata = StoredFileMetadata(
+        original_file_name="kimbap.jpg",
+        stored_file_name="kimbap.jpg",
+        stored_relative_path="data/uploads/session/kimbap.jpg",
+        file_extension=".jpg",
+        file_size_bytes=10,
+        session_id="session",
+    )
+
+    result = process_receipt_files_with_mock_ocr(
+        [metadata],
+        ocr_provider=FakePaddleLineProvider(
+            [
+                "총각김밥 / 152-21-01299 / 박준이",
+                "승인일시",
+                "20260526125309",
+                "합계 5,600",
+            ]
+        ),
+    )
+
+    assert not result.errors
+    receipt = result.receipt_records[0]
+    assert receipt.merchant_name == "총각김밥"
+    assert receipt.business_number == "152-21-01299"
+    assert receipt.transaction_date and receipt.transaction_date.isoformat() == "2026-05-26"
+    assert receipt.total_amount == 5600
+
+
+def test_process_receipt_files_applies_split_owner_line_merchant_and_split_datetime():
+    metadata = StoredFileMetadata(
+        original_file_name="kimbap_split.jpg",
+        stored_file_name="kimbap_split.jpg",
+        stored_relative_path="data/uploads/session/kimbap_split.jpg",
+        file_extension=".jpg",
+        file_size_bytes=10,
+        session_id="session",
+    )
+
+    result = process_receipt_files_with_mock_ocr(
+        [metadata],
+        ocr_provider=FakePaddleLineProvider(
+            [
+                "총각김밥 /",
+                "152-21-01299 / 박준이",
+                "승인일시 :",
+                "20260526",
+                "12:53:09",
+                "합계 5,600",
+            ]
+        ),
+    )
+
+    assert not result.errors
+    receipt = result.receipt_records[0]
+    assert receipt.merchant_name == "총각김밥"
+    assert receipt.business_number == "152-21-01299"
+    assert receipt.transaction_date and receipt.transaction_date.isoformat() == "2026-05-26"
+    assert receipt.total_amount == 5600
+
+
+def test_process_receipt_files_keeps_livestock_distribution_merchant_and_approval_number():
+    metadata = StoredFileMetadata(
+        original_file_name="livestock.jpg",
+        stored_file_name="livestock.jpg",
+        stored_relative_path="data/uploads/session/livestock.jpg",
+        file_extension=".jpg",
+        file_size_bytes=10,
+        session_id="session",
+    )
+
+    result = process_receipt_files_with_mock_ocr(
+        [metadata],
+        ocr_provider=FakePaddleLineProvider(
+            [
+                "정선축산유통",
+                "사업자번호 206-85-10228",
+                "승인일시 20260526152446",
+                "승인번호 73297759",
+                "합계 107,000",
+            ]
+        ),
+    )
+
+    assert not result.errors
+    receipt = result.receipt_records[0]
+    assert receipt.merchant_name == "정선축산유통"
+    assert receipt.transaction_date and receipt.transaction_date.isoformat() == "2026-05-26"
+    assert receipt.approval_number == "73297759"
+    assert receipt.total_amount == 107000
+
+
+def test_process_receipt_files_recovers_noisy_hotel_datetime_and_split_tax_total():
+    metadata = StoredFileMetadata(
+        original_file_name="hotel_split_tax.jpg",
+        stored_file_name="hotel_split_tax.jpg",
+        stored_relative_path="data/uploads/session/hotel_split_tax.jpg",
+        file_extension=".jpg",
+        file_size_bytes=10,
+        session_id="session",
+    )
+
+    result = process_receipt_files_with_mock_ocr(
+        [metadata],
+        ocr_provider=FakePaddleLineProvider(
+            [
+                "상호 : 한화호텔앤드리조트(주) / 설악",
+                "사업자 : 101-81-30747",
+                "승",
+                "인",
+                "간",
+                "N9260525085745208437",
+                "비씨카드",
+                "272원",
+                "657",
+                "728원",
+                "65",
+                "72300원",
+            ]
+        ),
+    )
+
+    assert not result.errors
+    receipt = result.receipt_records[0]
+    assert receipt.merchant_name == "한화호텔앤드리조트(주) 설악"
+    assert receipt.transaction_date and receipt.transaction_date.isoformat() == "2026-05-25"
+    assert receipt.business_number == "101-81-30747"
+    assert receipt.total_amount == 723000
+    assert receipt.supply_amount == 657272
+    assert receipt.vat_amount == 65728
 
 
 class FakeStandardOCRProvider:
@@ -158,6 +429,73 @@ class FakeStandardOCRProvider:
                     normalized_value="카드",
                 ),
             ],
+            confidence=0.98,
+            created_at=datetime(2026, 6, 10, 12, 0, 0),
+        )
+
+
+class FakePaddleLineProvider:
+    provider_name = "paddleocr"
+
+    def __init__(self, lines: list[str]) -> None:
+        self.lines = lines
+
+    def extract(self, _source: object) -> StandardOCRResult:
+        text_blocks = [
+            {
+                "block_id": f"line-{index}",
+                "page_index": 0,
+                "line_order": index,
+                "text": text,
+                "normalized_text": text,
+                "confidence": 0.98,
+                "block_type": "line",
+            }
+            for index, text in enumerate(self.lines)
+        ]
+        return PaddleStandardOCRAdapter().convert(
+            {
+                "engine": "paddleocr",
+                "engine_version": "test",
+                "status": "succeeded",
+                "language_hint": "ko",
+                "input_type": "image",
+                "image_count": 1,
+                "pages": [{"page_index": 0, "unit": "synthetic"}],
+                "lines": text_blocks,
+                "key_value_candidates": build_paddle_candidate_hints_from_safe_lines(text_blocks),
+            },
+            source_file_id="fake-paddle-lines",
+            source_file_name="fake.jpg",
+            provider_version="test",
+        )
+
+
+class FakeTextOnlyStandardProvider:
+    provider_name = "paddleocr"
+
+    def __init__(self, lines: list[str]) -> None:
+        self.lines = lines
+
+    def extract(self, _source: object) -> StandardOCRResult:
+        return StandardOCRResult(
+            id="text-only-standard-test",
+            provider="paddleocr",
+            provider_version="test",
+            engine_runtime="pc_local",
+            status="completed",
+            text_blocks=[
+                StandardOCRTextBlock(
+                    page_index=0,
+                    block_id=f"text-only-line-{index}",
+                    text=text,
+                    normalized_text=text,
+                    confidence=0.98,
+                    line_order=index,
+                )
+                for index, text in enumerate(self.lines)
+            ],
+            key_value_candidates=[],
             confidence=0.98,
             created_at=datetime(2026, 6, 10, 12, 0, 0),
         )

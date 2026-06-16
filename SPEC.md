@@ -1190,3 +1190,43 @@ PaddleOCR PDF handling remains unsupported/deferred in this runtime selection
 flow. This contract does not change Excel export sheets/columns, Processing
 History schema, default provider behavior, automatic fallback behavior, or
 formal quality scoring.
+
+## Review UI Receipt Source Preview Contract
+
+The review screen may show a selected receipt source preview to help manual
+verification. The preview is driven by the selected review row, not by provider
+raw output.
+
+Review table display fields:
+
+```text
+검토우선순위
+누락필드
+검토사유요약
+원본파일명
+원본보기
+```
+
+Priority values:
+
+- `HIGH`: missing `transaction_date`, `merchant_name`, or `total_amount`; amount
+  or VAT review reason exists; sensitive text is detected; or card match status
+  is `needs_review`, `candidate`, or `mismatch`.
+- `MEDIUM`: recommended category is uncategorized or review status is `pending`.
+- `LOW`: review status is `approved` and no major review reason exists.
+
+Source preview rules:
+
+- Resolve files only from `stored_relative_path` under the configured upload
+  root and upload relative root.
+- Block absolute paths, traversal paths, and paths outside `data/uploads`.
+- Show JPG/JPEG/PNG with `st.image`.
+- Show a PDF notice for PDF files instead of forcing rendering.
+- Display file names only, never full local paths.
+- Do not display OCR raw text, provider raw JSON, provider raw output, sensitive
+  raw values, secrets, endpoint URLs, or raw tracebacks.
+
+The preview contract does not change review editing, exclusion handling,
+ExcelExporter output, Processing History schema, default provider behavior,
+automatic fallback, formal scoring, mobile/PWA behavior, OCR provider behavior,
+or PaddleOCR accuracy rules.

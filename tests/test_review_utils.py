@@ -16,6 +16,7 @@ from app.ui.review_utils import (
     COL_GROSS_AMOUNT,
     COL_AMOUNT_SOURCE,
     COL_AMOUNT_WARNINGS,
+    COL_INCLUDED,
     COL_MERCHANT,
     COL_PAID_AMOUNT,
     COL_MISSING_FIELDS,
@@ -27,6 +28,7 @@ from app.ui.review_utils import (
     COL_SENSITIVE_CATEGORIES,
     COL_SENSITIVE_DETECTED,
     COL_SOURCE_FILE_NAME,
+    COL_SOURCE_PREVIEW,
     COL_TOTAL,
     COL_VAT,
     COL_VAT_SOURCE,
@@ -40,17 +42,23 @@ from app.ui.review_utils import (
     ISSUE_CARD_UNMATCHED,
     ISSUE_MERCHANT_MISSING,
     ISSUE_TOTAL_MISSING,
+    PRIORITY_HIGH,
+    PRIORITY_LOW,
+    PRIORITY_MEDIUM,
     REVIEW_FILTER_NEEDS_REVIEW,
     build_review_summary,
     filter_receipt_records_for_review,
+    format_display_amount,
     is_excluded_record,
     map_review_label_to_status,
     map_review_status_to_label,
     merge_reviewed_records,
+    missing_field_labels,
     receipt_records_to_review_dataframe,
     review_issue_labels,
     review_priority_label,
     review_dataframe_to_receipt_records,
+    sort_receipt_records_for_review,
 )
 
 
@@ -129,6 +137,13 @@ def test_receipt_records_to_review_dataframe_converts_records():
     assert dataframe.loc[0, COL_MERCHANT] == "테스트카페"
 
 
+def test_format_display_amount_uses_integer_with_comma_and_suffix():
+    assert format_display_amount(50000) == "50,000원"
+    assert format_display_amount(50000.0) == "50,000원"
+    assert format_display_amount("50000.000000") == "50,000원"
+    assert ".000000" not in format_display_amount("50000.000000")
+
+
 def test_review_dataframe_contains_required_display_columns():
     dataframe = receipt_records_to_review_dataframe([make_receipt()])
 
@@ -158,6 +173,7 @@ def test_review_dataframe_contains_required_display_columns():
         COL_REVIEW_REASON,
         COL_CARD_MATCH_STATUS,
         COL_SOURCE_FILE_NAME,
+        COL_SOURCE_PREVIEW,
     }
     assert expected_columns.issubset(set(dataframe.columns))
 
@@ -401,11 +417,108 @@ def test_review_dataframe_shows_quality_flags_for_missing_fields():
 
     dataframe = receipt_records_to_review_dataframe([receipt])
 
-    assert dataframe.loc[0, COL_REVIEW_PRIORITY] == "높음"
-    assert "상호" in dataframe.loc[0, COL_MISSING_FIELDS]
-    assert "총액" in dataframe.loc[0, COL_MISSING_FIELDS]
+    assert dataframe.loc[0, COL_REVIEW_PRIORITY] == PRIORITY_HIGH
+    assert "merchant_name" in dataframe.loc[0, COL_MISSING_FIELDS]
+    assert "total_amount" in dataframe.loc[0, COL_MISSING_FIELDS]
     assert ISSUE_MERCHANT_MISSING in dataframe.loc[0, COL_QUALITY_FLAGS]
     assert ISSUE_TOTAL_MISSING in dataframe.loc[0, COL_QUALITY_FLAGS]
+
+
+def test_missing_field_labels_use_core_field_names():
+    receipt = replace(
+        make_receipt(),
+        transaction_date=None,
+        merchant_name=None,
+        total_amount=None,
+        expense_category=None,
+    )
+
+    assert missing_field_labels(receipt) == [
+        "transaction_date",
+        "merchant_name",
+        "total_amount",
+        "expense_category",
+    ]
+
+
+def test_review_priority_label_marks_missing_core_fields_high():
+    receipt = replace(make_receipt(), transaction_date=None)
+
+    assert review_priority_label(receipt) == PRIORITY_HIGH
+
+
+def test_review_priority_label_marks_amount_or_vat_review_high():
+    assert review_priority_label(make_receipt(amount_warnings=["amount_review"])) == PRIORITY_HIGH
+    assert review_priority_label(make_receipt(vat_warnings=["vat_review"])) == PRIORITY_HIGH
+    assert review_priority_label(make_receipt(vat_review_required=True)) == PRIORITY_HIGH
+
+
+def test_review_priority_label_marks_sensitive_or_card_review_high():
+    assert review_priority_label(make_receipt(sensitive_text_detected=True)) == PRIORITY_HIGH
+    assert review_priority_label(make_receipt(card_match_status=CardMatchStatus.NEEDS_REVIEW.value)) == PRIORITY_HIGH
+    assert review_priority_label(make_receipt(card_match_status=CardMatchStatus.CANDIDATE.value)) == PRIORITY_HIGH
+    assert review_priority_label(make_receipt(card_match_status=CardMatchStatus.MISMATCH.value)) == PRIORITY_HIGH
+
+
+def test_review_priority_label_marks_uncategorized_or_pending_medium():
+    uncategorized = replace(
+        make_receipt(card_match_status=CardMatchStatus.MATCHED.value),
+        recommended_expense_category=None,
+        validation_warnings=[],
+    )
+    pending = replace(
+        make_receipt(review_status=ReviewStatus.PENDING.value, card_match_status=CardMatchStatus.MATCHED.value),
+        validation_warnings=[],
+    )
+
+    assert review_priority_label(uncategorized) == PRIORITY_MEDIUM
+    assert review_priority_label(pending) == PRIORITY_MEDIUM
+
+
+def test_review_dataframe_sorts_high_medium_low_by_default():
+    low = replace(
+        make_receipt(review_status=ReviewStatus.APPROVED.value, card_match_status=CardMatchStatus.MATCHED.value),
+        review_reason="",
+        review_reasons=[],
+        validation_warnings=[],
+        expense_category="복리후생비",
+    )
+    medium = replace(
+        make_receipt(review_status=ReviewStatus.PENDING.value, card_match_status=CardMatchStatus.MATCHED.value),
+        review_reason="",
+        review_reasons=[],
+        validation_warnings=[],
+        expense_category="복리후생비",
+    )
+    high = replace(make_receipt(), merchant_name=None)
+
+    dataframe = receipt_records_to_review_dataframe([low, medium, high])
+
+    assert list(dataframe[COL_REVIEW_PRIORITY]) == [PRIORITY_HIGH, PRIORITY_MEDIUM, PRIORITY_LOW]
+
+
+def test_review_dataframe_to_records_updates_sorted_row_without_tracking_columns():
+    low = replace(
+        make_receipt(review_status=ReviewStatus.APPROVED.value, card_match_status=CardMatchStatus.MATCHED.value),
+        source_file_id="low-source",
+        review_reason="",
+        review_reasons=[],
+        validation_warnings=[],
+        expense_category="복리후생비",
+    )
+    high = replace(make_receipt(), source_file_id="high-source", merchant_name=None)
+    sorted_records = sort_receipt_records_for_review([low, high])
+    dataframe = receipt_records_to_review_dataframe(sorted_records).drop(
+        columns=[INTERNAL_RECEIPT_ID, INTERNAL_SOURCE_FILE_ID, INTERNAL_OCR_RESULT_ID]
+    )
+    dataframe.loc[0, COL_INCLUDED] = False
+
+    updated = review_dataframe_to_receipt_records(dataframe, sorted_records)
+
+    assert updated[0].source_file_id == "high-source"
+    assert updated[0].export_included is False
+    assert updated[1].source_file_id == "low-source"
+    assert updated[1].export_included is True
 
 
 def test_review_issue_labels_include_card_unmatched_without_sensitive_values():
@@ -447,5 +560,12 @@ def test_review_priority_label_marks_complete_approved_record_done():
         review_status=ReviewStatus.APPROVED.value,
         card_match_status=CardMatchStatus.MATCHED.value,
     )
+    receipt = replace(
+        receipt,
+        review_reason="",
+        review_reasons=[],
+        validation_warnings=[],
+        expense_category="복리후생비",
+    )
 
-    assert review_priority_label(receipt) == "완료"
+    assert review_priority_label(receipt) == PRIORITY_LOW

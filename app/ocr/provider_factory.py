@@ -18,5 +18,10 @@ def get_ocr_provider(config: AppConfig | None = None) -> OCRProvider | PaddleOCR
     if provider_name == OCRProviderName.AZURE.value:
         return AzureDocumentIntelligenceProvider(safe_config)
     if provider_name in {OCRProviderName.PADDLE.value, OCRProviderName.PADDLEOCR.value}:
-        return PaddleOCRProvider()
+        return PaddleOCRProvider(
+            lang=safe_config.paddle_lang,
+            use_angle_cls=safe_config.paddle_use_angle_cls,
+            use_gpu=safe_config.paddle_use_gpu,
+            show_log=safe_config.paddle_show_log,
+        )
     raise ConfigurationError(f"지원하지 않는 OCR provider입니다: {provider_name}")
