@@ -626,3 +626,202 @@ Preview must block absolute paths, traversal paths, and files outside
 `data/uploads`. It must not display OCR raw text, provider raw JSON, provider raw
 output, full local paths, endpoint URLs, secrets, raw tracebacks, customer test
 files, or sensitive raw values.
+
+---
+
+## ADR-043: Merchant dictionary data is a review candidate source
+
+| 항목 | 내용 |
+|---|---|
+| 날짜 | 2026-06-17 |
+| 결정 | 상호/사업자번호 DB는 확정 DB가 아니라 검수 후보 생성을 위한 로컬 사전으로 둔다 |
+| 이유 | 공공 상가정보에는 사업자번호가 없을 수 있고, OCR 결과는 항상 사용자 검수가 필요하기 때문 |
+| 영향 | `merchant_master`, `merchant_alias`, `merchant_source_log` 테이블을 추가하고 기존 `ReceiptRecord`/ExcelExporter/처리 이력 흐름은 유지한다 |
+| 리스크 | 후보 점수가 높아도 실제 거래처와 다를 수 있음 |
+| 대응 | 후보는 `review_required=True`로만 반환하고, 사용자가 선택/수정할 때만 최종 상호가 바뀐다 |
+
+Guardrails:
+
+- Public CSV import stores allowed summary fields only.
+- NTS API is limited to OCR-detected business-number status lookup and uses an
+  `.env` key.
+- Representative names, phone raw values, full OCR text, provider raw JSON, full
+  local paths, raw API responses, mass collection, private crawling, automatic
+  confirmation, and tax judgment are out of scope.
+
+---
+
+## ADR-044: Public merchant CSV refresh uses road-address hints
+
+Status: Accepted
+
+Decision:
+The merchant dictionary may be refreshed about once per month from public store
+CSV files. Import keeps only allowed public columns: merchant name, branch,
+category, road name, building numbers, building name, and road address.
+
+Reason:
+Merchant-name fuzzy matching alone is weak for common store names. Road name and
+building-number hints can narrow candidates while keeping the feature as a manual
+review aid.
+
+Impact:
+`merchant_master` stores road-address hint columns, and `merchant_source_log`
+stores an allowed-column file hash for duplicate-file detection. Settings can
+import multiple CSV files sequentially without retaining the original files.
+The Settings browser-upload path allows up to 400MB per CSV file; near-limit
+imports should use the CLI path because it reads the local file directly.
+Safe OCR parser lines may also provide transient road-address hints for review
+candidate scoring, but these hints are not `ReceiptRecord` or Excel fields.
+
+Guardrails:
+Representative names, phone raw values, raw CSV rows, full local paths, Excel
+candidate columns, automatic confirmation, and tax judgment remain out of scope.
+Public CSV originals under `data/gov` or `govdata` must not be committed.
+
+---
+
+## ADR-045: Reviewed merchant names can become review aliases
+
+Status: Accepted
+
+Decision:
+When users create the reviewed Excel output, safe reviewed merchant names may be
+stored in `merchant_alias` with `source=review`. If the original parsed merchant
+name differs from the reviewed merchant name, the original parsed value may also
+be stored as an alias for future candidate matching.
+
+Reason:
+Public store data and OCR fuzzy matching are imperfect. User review corrections
+are a useful local signal, especially for repeated OCR mistakes, but they must
+remain candidate hints rather than automatic confirmations.
+
+Impact:
+Future merchant candidate lookup can rank review aliases before master fuzzy
+matches. Alias rows may link to `merchant_master` when business number exact,
+normalized name exact, or a high-confidence name match exists. Uncertain aliases
+remain unlinked with nullable `merchant_master_id`.
+
+Guardrails:
+Alias learning skips empty, too-short, mostly numeric/symbolic,
+business-number-like, phone-like, representative/owner-labeled, amount, date,
+card, and approval-like values. It does not store raw OCR text, provider raw
+JSON, full local paths, representative names, phone raw values, full addresses,
+API keys, or raw tracebacks. Learned aliases do not overwrite `ReceiptRecord`,
+ExcelExporter output, or Processing History receipt rows.
+
+---
+
+## ADR-046: Large public merchant CSV imports prefer CLI with safe performance summaries
+
+Status: Accepted
+
+Decision:
+For near-400MB public merchant CSV files, the CLI import path is the preferred
+operational path. The Settings UI can still import files up to the configured
+upload limit, but browser upload overhead makes it less suitable for large
+monthly refreshes.
+
+Reason:
+The CLI reads the local CSV directly and can use chunked SQLite bulk inserts in
+one import transaction. This avoids Streamlit browser upload overhead and gives
+operators a clear performance summary.
+
+Impact:
+Importer results include safe summary fields: file name, batch id, scanned row
+count, imported/skipped counts, duplicate-file status, elapsed seconds, and rows
+per second. Duplicate files are skipped by allowed-column file hash; duplicate
+rows are skipped by allowed-column row hash and SQLite uniqueness.
+
+Guardrails:
+Summaries must not include full local paths, raw CSV rows, representative names,
+phone raw values, blocked columns, raw OCR text, provider raw JSON, API keys, or
+raw tracebacks. Failed imports must not leave partial merchant rows or duplicate
+source logs. ExcelExporter, ReceiptRecord, and Processing History schemas remain
+unchanged.
+
+---
+
+## ADR-047: Merchant candidate quality diagnostics are manual safe summaries
+
+Status: Accepted
+
+Decision:
+Merchant dictionary and matcher quality diagnostics are provided as explicit
+operator actions in Settings. They show safe dictionary aggregates, masked
+candidate results for synthetic inputs, and optional saved ReceiptRecord
+aggregate diagnostics.
+
+Reason:
+Operators need a way to check whether public merchant data, address hints, and
+review aliases are improving candidate quality without exposing customer OCR raw
+text or accidentally confirming candidates.
+
+Impact:
+The diagnostic flow can read merchant dictionary tables and safe receipt fields.
+It can show counts, score buckets, match-type counts, and limited safe samples.
+Business numbers are masked, and candidates remain review-required hints.
+
+Guardrails:
+Diagnostics do not run bulk saved-record checks automatically. They must not
+store or display raw OCR text, provider raw JSON, full local paths, phone raw
+values, representative names, raw CSV rows, API keys, or raw tracebacks. They do
+not change `ReceiptRecord`, ExcelExporter output, Processing History schema,
+matcher thresholds, NTS behavior, OpenAI behavior, or review status.
+## ADR-048: Merchant dictionary search is bounded and candidate scoring favors review quality
+
+Status: Accepted
+
+Decision:
+Settings may provide a bounded merchant dictionary search by merchant-name query
+or road-name plus building-number query. Very short public-store substring
+matches stay below the fuzzy threshold unless a safe address hint boosts them.
+
+Reason:
+The public merchant database can be large and can contain many tenants at the
+same building. Broad address or short-name matches can create noisy candidates
+that look worse than the parser result. Search and matcher output should help
+manual review without pretending to confirm the merchant.
+
+Impact:
+Operators can inspect merchant dictionary rows without opening the CSV, review
+source preview does less full-table work, and short fuzzy candidates such as
+tiny prefixes are less likely to crowd the review table unless address evidence
+supports them.
+
+Guardrails:
+Candidates remain `review_required=True`. No raw OCR text, provider raw JSON,
+full local paths, raw CSV rows, phone raw values, representative names, API keys,
+or full business numbers are displayed or stored by this diagnostic/search flow.
+ReceiptRecord, ExcelExporter, and Processing History schemas remain unchanged.
+
+---
+
+## ADR-049: Real sample quality checks are manual safe summaries
+
+Status: Accepted
+
+Decision:
+Real PaddleOCR sample checks are run only as manual/opt-in quality reviews.
+Default pytest must not call real PaddleOCR, download OCR models, or require live
+OCR provider access.
+
+Reason:
+The project needs real-image quality checks, but they can be slow,
+environment-dependent, and privacy-sensitive. Keeping them manual preserves fast
+deterministic tests while still allowing targeted quality validation.
+
+Impact:
+Operators may verify individual samples by visually checking the receipt and
+comparing safe parsed fields. Reports should distinguish current-code
+reprocessing results from stale Processing History rows.
+
+Guardrails:
+Manual sample reports may include file name, expected visible merchant/date/
+amount/payment method, parsed fields, address-hint presence, top candidate
+summary, and mismatch status. They must not include raw OCR text, provider raw
+JSON, full local paths, raw CSV rows, representative names, phone raw values,
+API keys, raw tracebacks, or full business numbers. They must not auto-confirm
+candidates or change ReceiptRecord, ExcelExporter, or Processing History schemas.
+
+---

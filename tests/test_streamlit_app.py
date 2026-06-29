@@ -192,6 +192,39 @@ def test_process_receipt_files_accepts_standard_ocr_provider_result():
     assert isinstance(result.ocr_results[0], StandardOCRResult)
 
 
+def test_process_receipt_files_keeps_address_hint_as_transient_matching_data():
+    metadata = StoredFileMetadata(
+        original_file_name=r"C:\private\address_receipt.jpg",
+        stored_file_name="address_receipt.jpg",
+        stored_relative_path="data/uploads/session/address_receipt.jpg",
+        file_extension=".jpg",
+        file_size_bytes=10,
+        session_id="session",
+    )
+
+    result = process_receipt_files_with_mock_ocr(
+        [metadata],
+        ocr_provider=FakeTextOnlyStandardProvider(
+            [
+                "상호명 테스트상점",
+                "주소 서울특별시 서대문구 이화여대길 52-31",
+                "합계금액 12,000",
+            ]
+        ),
+    )
+
+    receipt = result.receipt_records[0]
+    hint = result.merchant_address_hints[receipt.id]
+    serialized_receipt = str(receipt.to_dict())
+
+    assert hint["road_name"] == "이화여대길"
+    assert hint["building_main_number"] == "52"
+    assert hint["building_sub_number"] == "31"
+    assert "이화여대길" not in serialized_receipt
+    assert "C:" not in str(result.merchant_address_hints)
+    assert "private" not in str(result.merchant_address_hints)
+
+
 def test_process_receipt_files_applies_noisy_known_merchant_normalization():
     metadata = StoredFileMetadata(
         original_file_name="playworld.jpg",

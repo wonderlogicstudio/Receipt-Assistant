@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from hashlib import sha256
 from pathlib import Path
@@ -9,6 +9,7 @@ from typing import Iterable, MutableMapping, Sequence
 import pandas as pd
 import streamlit as st
 
+from app.classifier.merchant_alias_learning import MerchantAliasLearningResult, MerchantAliasLearningService
 from app.core.config import get_config
 from app.core.card_models import CardParseResult, CardTransaction
 from app.core.exceptions import ConfigurationError, FileStoreError, MissingRequiredColumnsError, ReceiptAssistantError
@@ -16,6 +17,7 @@ from app.core.enums import OCRStatus
 from app.core.ocr_models import OCRResult
 from app.core.receipt_models import ReceiptRecord
 from app.core.standard_ocr import StandardOCRResult
+from app.db.merchant_repository import MerchantRepository
 from app.exporter.excel_exporter import ExcelExporter
 from app.history.job_service import JobHistoryService
 from app.ocr.base import OCRProvider
@@ -68,6 +70,7 @@ class ReceiptProcessingResult:
     receipt_records: list[ReceiptRecord]
     ocr_results: list[OCRResult | StandardOCRResult]
     errors: list[str]
+    merchant_address_hints: dict[str, dict[str, str | None]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -85,6 +88,7 @@ class ProcessingPipelineResult:
     ocr_results: list[OCRResult | StandardOCRResult]
     card_parse_results: list[CardParseResult]
     errors: list[str]
+    merchant_address_hints: dict[str, dict[str, str | None]] = field(default_factory=dict)
 
 
 def run() -> None:
@@ -145,6 +149,9 @@ def render_new_job_view() -> None:
                 st.session_state["card_transactions"] = result.card_transactions
                 st.session_state["receipt_records"] = result.receipt_records
                 st.session_state["reviewed_receipt_records"] = result.receipt_records
+                st.session_state["alias_learning_original_records"] = result.receipt_records
+                st.session_state["merchant_address_hints"] = result.merchant_address_hints
+                st.session_state.pop("merchant_candidate_cache", None)
                 st.session_state["export_file_bytes"] = None
                 st.session_state["export_file_name"] = None
                 reset_export_history_state(st.session_state)
@@ -176,12 +183,21 @@ def render_new_job_view() -> None:
         st.info("먼저 파일을 업로드하고 처리해 주세요.")
         return
 
-    reviewed_records = render_review_view(receipt_records)
+    reviewed_records = render_review_view(
+        receipt_records,
+        merchant_address_hints=st.session_state.get("merchant_address_hints") or {},
+    )
     st.session_state["reviewed_receipt_records"] = reviewed_records
 
     st.subheader("4단계: 엑셀 다운로드")
     if st.button("표준 엑셀 생성", type="secondary"):
         try:
+            alias_learning_summary = learn_merchant_aliases_from_review(
+                original_records=st.session_state.get("alias_learning_original_records") or receipt_records,
+                reviewed_records=reviewed_records,
+            )
+            if int(alias_learning_summary.get("saved_count") or 0) > 0:
+                st.info("상호 후보 사전에 검수 입력값 일부를 반영했습니다.")
             export_bytes = prepare_export_bytes(reviewed_records, card_transactions)
             export_file_name = build_export_filename()
             st.session_state["export_file_bytes"] = export_bytes
@@ -263,6 +279,28 @@ def save_export_history_once(
 def reset_export_history_state(session_state: MutableMapping[str, object]) -> None:
     session_state.pop("saved_job_id", None)
     session_state.pop("saved_export_signature", None)
+
+
+def learn_merchant_aliases_from_review(
+    *,
+    original_records: Iterable[ReceiptRecord],
+    reviewed_records: Iterable[ReceiptRecord],
+    service: MerchantAliasLearningService | None = None,
+) -> dict[str, object]:
+    try:
+        learner = service or MerchantAliasLearningService(MerchantRepository(config=get_config()))
+        result = learner.learn_from_review(
+            original_records=list(original_records),
+            reviewed_records=list(reviewed_records),
+        )
+    except Exception:
+        result = MerchantAliasLearningResult(failed_count=1)
+    return {
+        "saved_count": result.saved_count,
+        "skipped_count": result.skipped_count,
+        "failed_count": result.failed_count,
+        "failed": result.failed_count > 0,
+    }
 
 
 def build_export_history_signature(
@@ -365,6 +403,7 @@ def save_and_process_uploaded_files(
         ocr_results=processed.ocr_results,
         card_parse_results=processed.card_parse_results,
         errors=[*errors, *processed.errors],
+        merchant_address_hints=processed.merchant_address_hints,
     )
 
 
@@ -401,6 +440,7 @@ def process_uploaded_file_metadata(
         ocr_results=receipt_result.ocr_results,
         card_parse_results=card_result.parse_results,
         errors=[*receipt_result.errors, *card_result.errors, *unsupported_errors],
+        merchant_address_hints=receipt_result.merchant_address_hints,
     )
 
 
@@ -437,6 +477,7 @@ def process_receipt_files_with_mock_ocr(
     validator = ReceiptValidator()
     receipt_records: list[ReceiptRecord] = []
     ocr_results: list[OCRResult | StandardOCRResult] = []
+    merchant_address_hints: dict[str, dict[str, str | None]] = {}
     errors: list[str] = []
     try:
         provider = ocr_provider or get_ocr_provider(
@@ -456,9 +497,18 @@ def process_receipt_files_with_mock_ocr(
             )
             continue
         parsed_record = _parse_ocr_result(parser, ocr_result, metadata)
-        receipt_records.append(validator.validate(apply_sample_receipt_anchor(parsed_record)))
+        validated_record = validator.validate(apply_sample_receipt_anchor(parsed_record))
+        hint = _address_hint_for_ocr_result(ocr_result)
+        if hint:
+            merchant_address_hints[validated_record.id] = hint
+        receipt_records.append(validated_record)
 
-    return ReceiptProcessingResult(receipt_records=receipt_records, ocr_results=ocr_results, errors=errors)
+    return ReceiptProcessingResult(
+        receipt_records=receipt_records,
+        ocr_results=ocr_results,
+        errors=errors,
+        merchant_address_hints=merchant_address_hints,
+    )
 
 
 def render_runtime_ocr_provider_selector(configured_provider: str | None) -> str:
@@ -694,6 +744,13 @@ def _parse_ocr_result(
             confidence=ocr_result.confidence,
         )
     return parser.parse(ocr_result)
+
+
+def _address_hint_for_ocr_result(ocr_result: OCRResult | StandardOCRResult) -> dict[str, str | None] | None:
+    if not isinstance(ocr_result, StandardOCRResult):
+        return None
+    context = build_parser_context_from_standard_ocr(ocr_result)
+    return context.address_hint
 
 
 def _copy_ocr_result_metadata(

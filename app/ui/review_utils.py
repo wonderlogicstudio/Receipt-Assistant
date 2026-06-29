@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 import pandas as pd
 
@@ -24,6 +24,9 @@ REVIEW_STATUS_OPTIONS = [
 COL_INCLUDED = "포함"
 COL_DATE = "사용일자"
 COL_MERCHANT = "상호"
+COL_MERCHANT_CANDIDATE = "상호 후보"
+COL_MERCHANT_CANDIDATE_SCORE = "후보 점수"
+COL_BUSINESS_STATUS = "사업자번호 상태조회"
 COL_TOTAL = "총금액"
 COL_GROSS_AMOUNT = "할인전금액"
 COL_DISCOUNT_AMOUNT = "할인금액"
@@ -119,6 +122,9 @@ REVIEW_DISPLAY_COLUMNS = [
     COL_INCLUDED,
     COL_DATE,
     COL_MERCHANT,
+    COL_MERCHANT_CANDIDATE,
+    COL_MERCHANT_CANDIDATE_SCORE,
+    COL_BUSINESS_STATUS,
     COL_TOTAL,
     COL_GROSS_AMOUNT,
     COL_DISCOUNT_AMOUNT,
@@ -163,6 +169,9 @@ REVIEW_READ_ONLY_COLUMNS = [
     COL_MISSING_FIELDS,
     COL_QUALITY_FLAGS,
     COL_SOURCE_PREVIEW,
+    COL_MERCHANT_CANDIDATE,
+    COL_MERCHANT_CANDIDATE_SCORE,
+    COL_BUSINESS_STATUS,
     COL_RECOMMENDED_CATEGORY,
     COL_GROSS_AMOUNT,
     COL_DISCOUNT_AMOUNT,
@@ -200,8 +209,31 @@ class ReceiptSourcePreview:
         return self.kind == PREVIEW_KIND_PDF
 
 
-def receipt_records_to_review_dataframe(records: list[ReceiptRecord]) -> pd.DataFrame:
-    rows = [_record_to_review_row(record) for record in sort_receipt_records_for_review(records)]
+class MerchantMatcherProtocol(Protocol):
+    def find_candidates(
+        self,
+        *,
+        merchant_name: object = None,
+        business_number: object = None,
+        address_hint: object = None,
+    ) -> list[Any]:
+        ...
+
+
+def receipt_records_to_review_dataframe(
+    records: list[ReceiptRecord],
+    *,
+    merchant_matcher: MerchantMatcherProtocol | None = None,
+    merchant_address_hints: dict[str, object] | None = None,
+) -> pd.DataFrame:
+    rows = [
+        _record_to_review_row(
+            record,
+            merchant_matcher=merchant_matcher,
+            address_hint=(merchant_address_hints or {}).get(record.id),
+        )
+        for record in sort_receipt_records_for_review(records)
+    ]
     return pd.DataFrame(rows, columns=[*REVIEW_DISPLAY_COLUMNS, *tracking_columns()])
 
 
@@ -467,7 +499,13 @@ def tracking_columns() -> list[str]:
     return [INTERNAL_RECEIPT_ID, INTERNAL_SOURCE_FILE_ID, INTERNAL_OCR_RESULT_ID]
 
 
-def _record_to_review_row(record: ReceiptRecord) -> dict[str, Any]:
+def _record_to_review_row(
+    record: ReceiptRecord,
+    *,
+    merchant_matcher: MerchantMatcherProtocol | None = None,
+    address_hint: object = None,
+) -> dict[str, Any]:
+    candidate_label, candidate_score = _merchant_candidate_display(record, merchant_matcher, address_hint=address_hint)
     return {
         COL_REVIEW_PRIORITY: review_priority_label(record),
         COL_MISSING_FIELDS: _joined_missing_fields(record),
@@ -476,6 +514,9 @@ def _record_to_review_row(record: ReceiptRecord) -> dict[str, Any]:
         COL_INCLUDED: not is_excluded_record(record),
         COL_DATE: record.transaction_date,
         COL_MERCHANT: record.merchant_name,
+        COL_MERCHANT_CANDIDATE: candidate_label,
+        COL_MERCHANT_CANDIDATE_SCORE: candidate_score,
+        COL_BUSINESS_STATUS: _business_status_hint(record),
         COL_TOTAL: record.total_amount,
         COL_GROSS_AMOUNT: record.gross_amount,
         COL_DISCOUNT_AMOUNT: record.discount_amount,
@@ -505,6 +546,41 @@ def _record_to_review_row(record: ReceiptRecord) -> dict[str, Any]:
         INTERNAL_SOURCE_FILE_ID: record.source_file_id,
         INTERNAL_OCR_RESULT_ID: record.ocr_result_id,
     }
+
+
+def _merchant_candidate_display(
+    record: ReceiptRecord,
+    merchant_matcher: MerchantMatcherProtocol | None,
+    *,
+    address_hint: object = None,
+) -> tuple[str, str]:
+    if merchant_matcher is None:
+        return "-", "-"
+    try:
+        candidates = merchant_matcher.find_candidates(
+            merchant_name=record.merchant_name,
+            business_number=record.business_number,
+            address_hint=address_hint,
+        )
+    except Exception:
+        return "-", "-"
+    if not candidates:
+        return "-", "-"
+    candidate = candidates[0]
+    name = getattr(candidate, "candidate_merchant_name", None) or "-"
+    match_type = getattr(candidate, "match_type", None) or "candidate"
+    score = getattr(candidate, "score", None)
+    business_number = getattr(candidate, "candidate_business_number", None)
+    number_suffix = f" / {business_number}" if business_number else ""
+    address_summary = getattr(candidate, "address_summary", None)
+    address_suffix = f" / {address_summary}" if address_summary else ""
+    return f"{name}{number_suffix}{address_suffix} ({match_type})", "-" if score is None else str(score)
+
+
+def _business_status_hint(record: ReceiptRecord) -> str:
+    if not record.business_number:
+        return "-"
+    return "not_checked"
 
 
 def _joined_reasons(record: ReceiptRecord) -> str:

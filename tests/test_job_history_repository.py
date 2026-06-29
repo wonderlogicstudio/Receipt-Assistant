@@ -27,7 +27,30 @@ def test_init_db_creates_job_history_tables(tmp_path):
         "receipt_records",
         "card_transactions",
         "export_files",
+        "merchant_master",
+        "merchant_alias",
+        "merchant_source_log",
     }.issubset(table_names)
+
+    with sqlite3.connect(db_path) as connection:
+        merchant_columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(merchant_master)").fetchall()
+        }
+        source_log_columns = {
+            row[1]
+            for row in connection.execute("PRAGMA table_info(merchant_source_log)").fetchall()
+        }
+
+    assert {
+        "road_name",
+        "building_main_number",
+        "building_sub_number",
+        "building_name",
+        "road_address",
+        "normalized_road_address",
+    }.issubset(merchant_columns)
+    assert {"source_file_hash", "duplicate_file"}.issubset(source_log_columns)
 
 
 def test_repository_creates_gets_and_lists_jobs_latest_first(tmp_path):

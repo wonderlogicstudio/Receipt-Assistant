@@ -365,3 +365,87 @@ Expected fixture strategy for Week 10:
 - Selection behavior: the selected row id and row number are stored in session state, and the selected row is highlighted in a read-only selection table while the existing editable review table remains unchanged.
 - Safety: preview resolution uses `stored_relative_path` only, blocks traversal and files outside `data/uploads`, and never displays full local paths, OCR raw text, provider raw JSON, or sensitive values.
 - Out of scope: mobile/PWA work, OCR provider changes, PaddleOCR accuracy changes, OpenAI correction, ExcelExporter changes, Processing History schema changes, and customer test fixtures.
+
+## Merchant Candidate Dictionary
+
+- Status: implemented as a local review-candidate foundation.
+- Scope: add `merchant_master`, `merchant_alias`, and `merchant_source_log` tables; import public store CSV rows with allowed summary fields only; return merchant candidates from business-number exact, alias, and fuzzy name matching.
+- Review rule: candidates are hints only. They do not automatically confirm or overwrite `ReceiptRecord.merchant_name`, `ReceiptRecord.business_number`, or `review_status`.
+- NTS rule: `NTS_BUSINESS_API_KEY` is read from `.env`; the client supports OCR-detected business-number status lookup only and returns a safe skipped result when the key is missing.
+- Safety: representative names, phone raw values, full OCR text, provider raw JSON, full local paths, raw API responses, and tax judgment wording remain out of DB, logs, UI, tests, and Excel output.
+- Out of scope: private site crawling, mass business-number collection, automatic confirmation, ExcelExporter sheet/column changes, and Processing History receipt schema changes.
+
+## OCR Address Hint to Merchant Candidate Matching
+
+- Status: implemented as a transient review-candidate scoring input.
+- Scope: extract conservative road-address hints from safe OCR parser lines and pass them to merchant candidate matching during review.
+- Review rule: address hints may boost candidate score but never confirm or overwrite `ReceiptRecord.merchant_name`, `business_number`, or `review_status`.
+- Address-only fallback: when merchant and business number are missing, an exact
+  structured road-name/building-number match may produce low-score review
+  candidates only.
+- Safety: address hints are not exported to Excel and are not stored as Processing History receipt fields. Phone, representative, business-number, approval/card, amount, and date lines are rejected as address hints.
+
+## Monthly Public Merchant CSV Refresh
+
+- Status: implemented as a Settings-screen import flow and CLI flow.
+- Scope: import one or more public store CSV files sequentially, using only merchant name, branch, category, road name, building numbers, building name, and road address columns.
+- Duplicate rule: file-level duplicates are skipped by an allowed-column content hash; row-level duplicates are skipped by the allowed-column row hash.
+- Upload limit: the Settings-screen browser upload path allows up to 400MB per CSV file, but the CLI path is preferred for near-limit files because it avoids browser upload overhead.
+- Performance: import uses chunked SQLite bulk inserts within one import
+  transaction and reports scanned/imported/skipped counts, elapsed seconds, and
+  rows per second in CLI/Settings summaries.
+- Refresh cadence: download the latest public CSV about once per month, import it locally, and keep only safe import logs in SQLite.
+- Safety: public CSV originals under `data/gov` or `govdata` are ignored by Git and must not be committed. Representative names, phone raw values, raw CSV rows, full local paths, Excel output changes, automatic confirmation, and tax judgment remain out of scope.
+
+## Merchant Review Alias Learning
+
+- Status: implemented as a safe review-output learning step.
+- Scope: when the user creates the reviewed Excel output, safe reviewed merchant
+  names are added to `merchant_alias` with `source=review`. If the original
+  parsed merchant differs from the reviewed merchant, the original parsed name
+  may also be added as an alias.
+- Matching impact: future merchant candidate lookup can use these aliases, but
+  aliases remain review hints only.
+- Safety: alias learning skips invalid/sensitive-looking values, avoids duplicate
+  alias rows, keeps uncertain `merchant_master_id` values nullable, does not
+  store raw OCR text/provider raw JSON/full paths/representative names/phone raw
+  values/full addresses, and does not change ExcelExporter or Processing History
+  receipt schemas.
+
+## Merchant Dictionary Diagnostics
+
+- Status: implemented as a manual Settings-screen operator diagnostic.
+- Scope: show safe merchant dictionary counts, duplicate import count, latest
+  import file name, top category counts, recent batch summaries, synthetic
+  matcher test results, and optional saved ReceiptRecord aggregate diagnostics.
+- Execution rule: matcher diagnostics and saved-record aggregation run only
+  after an explicit button action.
+- Safety: business numbers are masked, saved-record diagnostics use only safe
+  receipt fields, candidates remain `review_required=True`, and diagnostics do
+  not expose raw OCR text, provider raw JSON, full local paths, representative
+  names, phone raw values, API keys, or raw CSV rows.
+- Out of scope: automatic confirmation, NTS automatic calls, OpenAI correction,
+  ExcelExporter changes, Processing History schema changes, and customer-file
+  fixtures.
+## Merchant Matching Quality Stabilization
+
+- Status: implemented as a quality-preserving stabilization pass.
+- Scope: verify key real PaddleOCR samples one by one, distinguish stale
+  Processing History rows from current parser output, reduce review source
+  preview rendering work, add a bounded Settings merchant dictionary search, and
+  refine short substring fuzzy candidates.
+- Operator tools: Settings now includes bounded merchant dictionary search and
+  manual Processing History safety diagnostics. Review view shows safe
+  performance timing for dataframe creation, candidate lookup/cache, and source
+  preview preparation.
+- Manual sample rule: real PaddleOCR image checks remain opt-in/manual only.
+  Default pytest must not run real OCR or download models.
+- Known finding: stale Processing History rows may show old bad results even
+  when current-code reprocessing returns the expected parser fields, so reports
+  must separate DB history state from latest parser output.
+- Safety: candidates remain review-required hints only. No ReceiptRecord schema,
+  ExcelExporter sheet/column, Processing History schema, default provider, raw
+  OCR, provider raw JSON, full path, phone, representative, or raw CSV exposure
+  changes are included.
+- Remaining work: a full 46-sample opt-in PaddleOCR batch should be run as a
+  separate timed quality pass if needed.

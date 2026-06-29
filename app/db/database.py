@@ -27,6 +27,20 @@ RECEIPT_RECORD_COLUMN_MIGRATIONS = {
     "sensitive_warnings_json": "TEXT",
 }
 
+MERCHANT_MASTER_COLUMN_MIGRATIONS = {
+    "road_name": "TEXT",
+    "building_main_number": "TEXT",
+    "building_sub_number": "TEXT",
+    "building_name": "TEXT",
+    "road_address": "TEXT",
+    "normalized_road_address": "TEXT",
+}
+
+MERCHANT_SOURCE_LOG_COLUMN_MIGRATIONS = {
+    "source_file_hash": "TEXT",
+    "duplicate_file": "INTEGER NOT NULL DEFAULT 0",
+}
+
 
 def _db_path(config: AppConfig | None = None, db_path: Path | str | None = None) -> Path:
     if db_path is not None:
@@ -59,6 +73,8 @@ def init_db(config: AppConfig | None = None, db_path: Path | str | None = None) 
         for statement in SCHEMA_SQL:
             connection.execute(statement)
         _ensure_columns(connection, "receipt_records", RECEIPT_RECORD_COLUMN_MIGRATIONS)
+        _ensure_columns(connection, "merchant_master", MERCHANT_MASTER_COLUMN_MIGRATIONS)
+        _ensure_columns(connection, "merchant_source_log", MERCHANT_SOURCE_LOG_COLUMN_MIGRATIONS)
 
 
 def _ensure_columns(connection: sqlite3.Connection, table_name: str, columns: dict[str, str]) -> None:

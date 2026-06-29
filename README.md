@@ -228,6 +228,14 @@ Azure failures may include a sanitized `diagnostic_detail_code`, for example `qu
 PaddleOCR now generates only conservative candidate hints from safe OCR lines: obvious dates, business numbers, payment methods, and labeled amounts. It does not guess merchant names or infer totals from unlabeled maximum amounts.
 
 Week 10-D remains the future step for statistics aggregation, average processing time, failure rate, field match-rate summaries, formal field match scoring, and Azure fallback policy rules. These are not automated by the Week 10-C report.
+
+## Merchant Dictionary Diagnostics
+
+Settings includes a manual merchant dictionary diagnostic section for operator checks. It can show safe aggregate counts for `merchant_master`, `merchant_alias`, import batches, duplicate import logs, latest import file name, and top category counts.
+
+The matcher test form accepts a synthetic merchant name, optional business number, and optional address hint. Results are review candidates only. Business numbers are masked, and the diagnostic output does not include raw OCR text, provider raw JSON, full local paths, phone numbers, representative names, or raw CSV rows.
+
+Saved receipt diagnostics use only safe Processing History fields: merchant name, business number, source file name, and review status. The output is aggregate counts and limited safe samples, and it does not change `ReceiptRecord`, ExcelExporter sheets/columns, or existing Processing History schema.
 ## Week 10-D-prep: Synthetic PaddleOCR Quality Fixtures
 
 Azure OCR quota/rate-limit issues can block live Azure comparisons, so PaddleOCR
@@ -288,3 +296,105 @@ The preview uses `stored_relative_path` only, resolves files under the configure
 upload root, blocks traversal or files outside `data/uploads`, and displays file
 names only. It does not expose OCR raw text, provider raw JSON, full local paths,
 secrets, endpoint URLs, or sensitive raw values.
+
+### Merchant candidate dictionary
+
+The app can maintain a local SQLite merchant candidate dictionary from public
+store data and user review aliases. This is a review aid only: merchant
+candidates do not automatically overwrite `ReceiptRecord.merchant_name` or
+`ReceiptRecord.business_number`.
+
+Public store CSV import stores only a minimal summary: merchant name, branch
+name, coarse area hint, category names, source row hash, and import batch id.
+Representative names, phone numbers, full OCR text, provider raw JSON, and full
+local paths are not stored.
+
+Optional National Tax Service business status lookup uses
+`NTS_BUSINESS_API_KEY` from `.env` and is limited to OCR-detected business
+numbers. It is not a full business-number download path and does not provide tax
+or filing judgment.
+
+Import a downloaded public store CSV locally:
+
+```bash
+python scripts/import_public_merchants.py path/to/public_store.csv --encoding utf-8-sig
+```
+
+The command prints the CSV file name, batch id, imported row count, and skipped
+row count only.
+
+The Settings screen also provides a merchant dictionary CSV import box for
+multiple public CSV files. Files are imported sequentially through a temporary
+file and are not retained after import.
+
+For very large files, prefer the CLI command over browser upload. Streamlit must
+upload the file through the browser first, while the CLI reads the local file
+directly and uses bulk SQLite inserts.
+
+The CLI and Settings import result show a safe performance summary: file name,
+batch id, scanned row count, imported/skipped counts, duplicate-file status,
+elapsed seconds, and rows per second. They do not show full local paths or raw
+CSV rows.
+
+The Settings upload path allows public merchant CSV files up to 400MB per file.
+This is configured in `.streamlit/config.toml` with `server.maxUploadSize = 400`.
+Restart Streamlit after changing this value. Near the 400MB limit, the CLI import
+is still recommended because it avoids browser upload overhead.
+
+Only these public-store CSV columns are imported:
+
+```text
+상호명, 지점명, 상권업종대분류명, 상권업종중분류명, 상권업종소분류명,
+도로명, 건물본번지, 건물부번지, 건물명, 도로명주소
+```
+
+The importer ignores all other columns, including representative and phone
+columns. It stores road-address fields for matching hints, but review and Excel
+outputs do not expose full address candidates. The default encoding is
+`utf-8-sig` for UTF-8 files with or without BOM; `cp949` is available for older
+CSV files.
+
+OCR-derived road-address hints may be extracted from safe parser lines and used
+only to boost merchant candidate scores during review. These hints are transient
+matching inputs: they do not overwrite `ReceiptRecord`, are not added to Excel
+columns or sheets, and are not stored as raw OCR text.
+
+### Review alias learning
+
+When users create the reviewed Excel output, the app may add safe reviewed
+merchant names to `merchant_alias` with `source=review`. If the reviewed merchant
+name differs from the parser's original merchant name, the original parsed name
+may also be kept as an alias for future candidate matching.
+
+Alias learning stores only merchant alias fields plus optional normalized
+business number and nullable `merchant_master_id`. It does not store raw OCR
+text, provider raw JSON, full local paths, representative names, phone raw
+values, or full addresses. Learned aliases remain review candidates only and do
+not automatically overwrite future `ReceiptRecord` values.
+## Merchant Dictionary Search
+
+Settings includes a manual merchant dictionary search for operators. It accepts
+either a merchant-name query or a road-name plus building-number query, then
+shows only safe summary fields: merchant name, branch name, category summary,
+road hint, business-number presence, and source.
+
+The search does not expose full local paths, raw CSV rows, OCR raw text,
+provider raw JSON, representative names, phone raw values, or full business
+numbers. For large public merchant data, avoid blank or broad searches; use
+specific merchant names or road-name/building-number pairs.
+
+### Safe sample quality checks
+
+Real PaddleOCR receipt-image checks are manual/opt-in only. Default pytest must
+not call real PaddleOCR, download OCR models, or process customer files.
+
+When checking real samples, compare one image at a time against the visible
+receipt fields and report only a safe summary: file name, expected visible
+merchant/date/amount/payment method, parsed fields, address-hint presence, top
+merchant candidate summary, and mismatch status. Do not print or store full OCR
+raw text, provider raw output, provider raw JSON, full local paths, phone raw
+values, representative names, or raw CSV rows.
+
+Processing History may contain stale rows from earlier parser versions. Quality
+reports should distinguish current-code reprocessing results from existing DB
+rows instead of treating old stored results as current parser regressions.

@@ -487,3 +487,66 @@ python -m pytest tests/test_settings_utils.py
 - [x] Source preview blocks path traversal and files outside `data/uploads`.
 - [x] Full local paths, OCR raw text, provider raw JSON, and sensitive raw values are not displayed.
 - [x] Existing review editing, exclusion, Excel export, and Processing History flows remain unchanged.
+
+## Merchant Candidate Dictionary
+
+- [x] `merchant_master`, `merchant_alias`, and `merchant_source_log` tables are created without changing existing receipt/export schemas.
+- [x] Public store CSV import stores allowed summary fields only.
+- [x] Representative names, phone raw values, full OCR text, provider raw JSON, and full local paths are not stored by merchant import or matching.
+- [x] Merchant name normalization handles whitespace, symbols, and common legal entity labels.
+- [x] Business-number normalization accepts only 10 digits and formats `000-00-00000`.
+- [x] Business-number exact match is ranked before fuzzy name candidates.
+- [x] Alias candidates are returned as review hints.
+- [x] Candidates do not automatically overwrite `ReceiptRecord.merchant_name`, `business_number`, or `review_status`.
+- [x] Review UI candidate columns are read-only hints.
+- [x] NTS business status client reads the API key from `.env` and safely skips when the key is missing.
+- [x] NTS lookup is limited to OCR-detected business-number status checks and does not implement mass collection, true-name verification, or tax judgment.
+- [x] ExcelExporter sheets/columns remain unchanged and candidate details are not exported.
+- [x] CSV import reads only `상호명`, `지점명`, category, road name, building number, building name, and road-address columns.
+- [x] CSV import supports UTF-8/UTF-8 BOM by default and CP949 as an exception path.
+- [x] Same allowed-column file content is skipped as a duplicate file.
+- [x] Same allowed-column row content is skipped as a duplicate row.
+- [x] Road-address hints can boost merchant candidate scores without automatic confirmation.
+- [x] Structured address-only matches can be shown as low-score review candidates when merchant/business-number fields are missing.
+- [x] OCR safe lines can provide transient road-address hints for candidate scoring without changing `ReceiptRecord` or Excel output.
+- [x] Phone, representative, business-number, approval/card, amount, and date lines are not treated as address hints.
+- [x] Settings UI can import multiple merchant CSV files sequentially and displays only file-name/count/batch summaries.
+- [x] Settings UI and Streamlit config allow merchant CSV uploads up to 400MB per file and reject larger files safely.
+- [x] `data/gov` and `govdata` public CSV originals are excluded from Git.
+- [x] Public merchant CSV import reports scanned/imported/skipped counts, duplicate-file status, elapsed seconds, and rows per second.
+- [x] Public merchant CSV import uses chunked SQLite bulk inserts inside one import transaction.
+- [x] Duplicate rows are skipped through allowed-column row hashes without per-row DB SELECT checks.
+- [x] Duplicate files are skipped by allowed-column file hash before the second import pass.
+- [x] CLI and Settings import summaries show only file names and safe counts, not full paths or raw CSV rows.
+- [x] Reviewed merchant names can be accumulated in `merchant_alias` as `source=review`.
+- [x] Review alias learning skips empty, too-short, mostly numeric, business-number, phone, representative, amount, date, card, and approval-like values.
+- [x] Repeated review saves do not duplicate the same `normalized_alias_name + business_number + source` alias.
+- [x] Alias learning failure does not block Excel generation or review save flow.
+- [x] Alias learning does not store raw OCR text, provider raw JSON, full local paths, representative names, phone raw values, or full addresses.
+- [x] Learned aliases remain review candidates and do not automatically overwrite `ReceiptRecord` fields.
+- [x] Merchant dictionary diagnostics run only after an explicit button action.
+- [x] Dictionary diagnostics show safe counts, latest file name, top categories, and recent batch summaries without full paths.
+- [x] Candidate diagnostics mask business numbers and keep `review_required=True`.
+- [x] Saved ReceiptRecord diagnostics use only merchant name, business number, source file name, and review status.
+- [x] Diagnostic output excludes raw OCR text, provider raw JSON, phone raw values, representative names, raw CSV rows, full local paths, API keys, and tracebacks.
+- [x] Merchant diagnostics do not change ExcelExporter sheets/columns, Processing History schema, or `ReceiptRecord` values.
+- [x] Review source selection does not repeatedly re-query the same merchant candidates within a Streamlit session.
+## Merchant Dictionary Search Quality Check
+
+- [x] Settings merchant dictionary search requires a merchant-name query or road-name plus building-number query.
+- [x] Search result rows show safe summaries only and do not include full local paths, raw CSV rows, phone raw values, representative names, OCR raw text, provider raw JSON, or full business numbers.
+- [x] Review selected-row source preview renders only the selected row summary instead of styling the full review dataframe.
+- [x] Short public-store substring candidates need address support before they pass the fuzzy threshold.
+- [x] Address-only candidates remain low-score review hints and never overwrite `ReceiptRecord`.
+
+## Quality Stabilization and Safe Diagnostics
+
+- [x] Real PaddleOCR sample checks are manual/opt-in only and are not included in default pytest.
+- [x] Key 25/26 samples were visually checked one by one and compared against current parser output with safe summaries only.
+- [x] Existing Processing History rows are distinguished from latest-code reprocessing results.
+- [x] Processing History safety diagnostics count forbidden columns and path-like values without displaying raw values.
+- [x] Review UI performance summary includes dataframe generation, candidate lookup/cache, and preview preparation timing.
+- [x] Source preview thumbnail fallback does not expose full local paths when image loading fails.
+- [x] Settings merchant dictionary search uses bounded queries and default limit 50.
+- [x] Merchant DB search summaries show allowed fields only and exclude raw OCR, provider raw JSON, raw CSV rows, phone raw values, representative names, full local paths, and full business numbers.
+- [x] No ReceiptRecord schema, ExcelExporter sheet/column, Processing History schema, default provider, NTS automatic call, or OpenAI automatic correction change was introduced.

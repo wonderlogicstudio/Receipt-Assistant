@@ -5,6 +5,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.core.standard_ocr import StandardOCRResult, assert_no_forbidden_ocr_payload
+from app.parser.address_hint import extract_address_hint_from_safe_lines
 
 
 AMOUNT_CANDIDATE_TYPES = {
@@ -41,6 +42,7 @@ class StandardOCRParserContext(BaseModel):
     non_amount_candidate_map: dict[str, list[str]] = Field(default_factory=dict)
     review_hints: list[str] = Field(default_factory=list)
     sensitive_categories: list[str] = Field(default_factory=list)
+    address_hint: dict[str, str | None] | None = None
     diagnostic_code: str | None = None
 
     @model_validator(mode="after")
@@ -51,11 +53,13 @@ class StandardOCRParserContext(BaseModel):
 
 def build_parser_context_from_standard_ocr(result: StandardOCRResult) -> StandardOCRParserContext:
     candidate_map = extract_candidate_map(result)
+    safe_text_lines = get_text_lines_for_parser(result)
+    address_hint = extract_address_hint_from_safe_lines(safe_text_lines)
     context = StandardOCRParserContext(
         source_file_name=result.source_file_name,
         provider=result.provider,
         status=result.status,
-        safe_text_lines=get_text_lines_for_parser(result),
+        safe_text_lines=safe_text_lines,
         candidate_map=candidate_map,
         amount_candidate_map=_filter_amount_candidate_map(candidate_map),
         non_amount_candidate_map=_filter_non_amount_candidate_map(candidate_map),
@@ -67,6 +71,7 @@ def build_parser_context_from_standard_ocr(result: StandardOCRResult) -> Standar
                 if block.sensitive_category
             ]
         ),
+        address_hint=address_hint.as_dict() if address_hint is not None else None,
         diagnostic_code=result.diagnostic_code,
     )
     assert_no_forbidden_ocr_payload(context.model_dump(mode="json"))

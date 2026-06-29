@@ -2,14 +2,20 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from app.classifier.merchant_importer import MerchantImportResult
 from app.core.config import AppConfig
+from app.db.merchant_repository import MerchantSearchRow
 from app.db.repository import JobHistoryRepository
+from app.history.safe_diagnostics import ProcessingHistorySafetyDiagnostic
 from app.history.job_service import JobHistoryService
 from app.ui.settings_utils import (
     build_db_summary,
     build_history_connection_summary,
+    build_merchant_import_result_rows,
+    build_merchant_search_result_rows,
     build_ocr_settings_summary,
     build_paddle_smoke_result_summary,
+    build_processing_history_safety_rows,
     build_retention_settings_summary,
     build_storage_summary,
     format_bytes,
@@ -92,6 +98,100 @@ def test_build_paddle_smoke_result_summary_is_count_and_status_only():
     assert summary["text_block_count"] == 0
     assert "sample.png" not in serialized
     assert "provider_fields" not in serialized
+
+
+def test_build_merchant_import_result_rows_are_safe_summary_only():
+    rows = build_merchant_import_result_rows(
+        [
+            MerchantImportResult(
+                source_batch_id="batch-1",
+                imported_row_count=10,
+                skipped_row_count=2,
+                duplicate_file=False,
+                source_file_name=r"C:\private\public_stores.csv",
+                source_file_hash="secret-hash-value",
+                scanned_row_count=12,
+                skipped_duplicate_row_count=1,
+                skipped_invalid_row_count=1,
+                elapsed_seconds=0.5,
+                rows_per_second=24.0,
+            )
+        ]
+    )
+
+    serialized = str(rows)
+
+    assert rows[0]["file_name"] == "public_stores.csv"
+    assert rows[0]["scanned_row_count"] == 12
+    assert rows[0]["imported_row_count"] == 10
+    assert rows[0]["skipped_row_count"] == 2
+    assert rows[0]["skipped_duplicate_row_count"] == 1
+    assert rows[0]["skipped_invalid_row_count"] == 1
+    assert rows[0]["duplicate_file"] is False
+    assert rows[0]["elapsed_seconds"] == 0.5
+    assert rows[0]["rows_per_second"] == 24.0
+    assert "C:" not in serialized
+    assert "private" not in serialized
+    assert "secret-hash-value" not in serialized
+
+
+def test_build_merchant_search_result_rows_are_safe_summary_only():
+    rows = build_merchant_search_result_rows(
+        [
+            MerchantSearchRow(
+                id="master-1",
+                merchant_name="총각김밥",
+                normalized_name="총각김밥",
+                business_number="123-45-67890",
+                source="public_store_data",
+                match_source="master",
+                branch_name="종로점",
+                category_large="음식",
+                category_medium="분식",
+                category_small="김밥",
+                road_name="종로",
+                building_main_number="19",
+                building_sub_number="0",
+                road_address=r"C:\private\서울 종로 19",
+                address_summary="종로 19",
+                source_batch_id="batch-1",
+            )
+        ]
+    )
+
+    serialized = str(rows)
+
+    assert rows[0]["merchant_name"] == "총각김밥"
+    assert rows[0]["branch_name"] == "종로점"
+    assert rows[0]["category"] == "음식 / 분식 / 김밥"
+    assert rows[0]["road_name"] == "종로"
+    assert rows[0]["building_number"] == "19"
+    assert rows[0]["road_hint"] == "종로 19"
+    assert rows[0]["business_number_present"] is True
+    assert rows[0]["source_batch_id"] == "batch-1"
+    assert "123-45-67890" not in serialized
+    assert "C:\\private" not in serialized
+
+
+def test_build_processing_history_safety_rows_are_count_only() -> None:
+    rows = build_processing_history_safety_rows(
+        ProcessingHistorySafetyDiagnostic(
+            table_count=5,
+            checked_table_count=5,
+            forbidden_column_count=0,
+            absolute_path_value_count=0,
+            checked_text_value_count=10,
+            receipt_record_count=2,
+            uploaded_file_count=1,
+            export_file_count=1,
+        )
+    )
+
+    serialized = str(rows)
+
+    assert {"metric": "is_safe", "value": True} in rows
+    assert "C:" not in serialized
+    assert "raw_text" not in serialized
 
 
 def test_build_retention_settings_summary_returns_safe_values():

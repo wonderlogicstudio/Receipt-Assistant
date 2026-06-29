@@ -112,10 +112,127 @@ CREATE TABLE IF NOT EXISTS export_files (
 )
 """
 
+MERCHANT_MASTER_SQL = """
+CREATE TABLE IF NOT EXISTS merchant_master (
+    id TEXT PRIMARY KEY,
+    merchant_name TEXT NOT NULL,
+    normalized_merchant_name TEXT NOT NULL,
+    business_number TEXT,
+    branch_name TEXT,
+    area_hint TEXT,
+    category_large TEXT,
+    category_medium TEXT,
+    category_small TEXT,
+    road_name TEXT,
+    building_main_number TEXT,
+    building_sub_number TEXT,
+    building_name TEXT,
+    road_address TEXT,
+    normalized_road_address TEXT,
+    source TEXT NOT NULL,
+    source_row_hash TEXT NOT NULL,
+    source_batch_id TEXT NOT NULL,
+    review_required INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+)
+"""
+
+MERCHANT_ALIAS_SQL = """
+CREATE TABLE IF NOT EXISTS merchant_alias (
+    id TEXT PRIMARY KEY,
+    merchant_master_id TEXT,
+    alias_name TEXT NOT NULL,
+    normalized_alias_name TEXT NOT NULL,
+    business_number TEXT,
+    source TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY(merchant_master_id) REFERENCES merchant_master(id)
+)
+"""
+
+MERCHANT_SOURCE_LOG_SQL = """
+CREATE TABLE IF NOT EXISTS merchant_source_log (
+    id TEXT PRIMARY KEY,
+    source_name TEXT NOT NULL,
+    source_file_name TEXT,
+    source_file_hash TEXT,
+    source_batch_id TEXT NOT NULL,
+    imported_row_count INTEGER NOT NULL DEFAULT 0,
+    skipped_row_count INTEGER NOT NULL DEFAULT 0,
+    duplicate_file INTEGER NOT NULL DEFAULT 0,
+    note TEXT,
+    created_at TEXT NOT NULL
+)
+"""
+
+MERCHANT_INDEX_SQL = """
+CREATE INDEX IF NOT EXISTS idx_merchant_master_business_number
+ON merchant_master(business_number)
+"""
+
+MERCHANT_NAME_INDEX_SQL = """
+CREATE INDEX IF NOT EXISTS idx_merchant_master_normalized_name
+ON merchant_master(normalized_merchant_name)
+"""
+
+MERCHANT_SOURCE_INDEX_SQL = """
+CREATE UNIQUE INDEX IF NOT EXISTS idx_merchant_master_source_row
+ON merchant_master(source, source_row_hash)
+"""
+
+MERCHANT_ROAD_ADDRESS_INDEX_SQL = """
+CREATE INDEX IF NOT EXISTS idx_merchant_master_normalized_road_address
+ON merchant_master(normalized_road_address)
+"""
+
+MERCHANT_ROAD_BUILDING_INDEX_SQL = """
+CREATE INDEX IF NOT EXISTS idx_merchant_master_road_building
+ON merchant_master(road_name, building_main_number, building_sub_number)
+"""
+
+MERCHANT_BUILDING_MAIN_INDEX_SQL = """
+CREATE INDEX IF NOT EXISTS idx_merchant_master_building_main
+ON merchant_master(building_main_number)
+"""
+
+MERCHANT_SOURCE_FILE_HASH_INDEX_SQL = """
+CREATE INDEX IF NOT EXISTS idx_merchant_source_log_file_hash
+ON merchant_source_log(source_name, source_file_hash)
+"""
+
+MERCHANT_ALIAS_BUSINESS_INDEX_SQL = """
+CREATE INDEX IF NOT EXISTS idx_merchant_alias_business_number
+ON merchant_alias(business_number)
+"""
+
+MERCHANT_ALIAS_NAME_INDEX_SQL = """
+CREATE INDEX IF NOT EXISTS idx_merchant_alias_normalized_name
+ON merchant_alias(normalized_alias_name)
+"""
+
+MERCHANT_ALIAS_DEDUPE_INDEX_SQL = """
+CREATE INDEX IF NOT EXISTS idx_merchant_alias_dedupe
+ON merchant_alias(normalized_alias_name, business_number, source)
+"""
+
 SCHEMA_SQL = [
     PROCESSING_JOBS_SQL,
     UPLOADED_FILES_SQL,
     RECEIPT_RECORDS_SQL,
     CARD_TRANSACTIONS_SQL,
     EXPORT_FILES_SQL,
+    MERCHANT_MASTER_SQL,
+    MERCHANT_ALIAS_SQL,
+    MERCHANT_SOURCE_LOG_SQL,
+    MERCHANT_INDEX_SQL,
+    MERCHANT_NAME_INDEX_SQL,
+    MERCHANT_SOURCE_INDEX_SQL,
+    MERCHANT_ROAD_ADDRESS_INDEX_SQL,
+    MERCHANT_ROAD_BUILDING_INDEX_SQL,
+    MERCHANT_BUILDING_MAIN_INDEX_SQL,
+    MERCHANT_SOURCE_FILE_HASH_INDEX_SQL,
+    MERCHANT_ALIAS_BUSINESS_INDEX_SQL,
+    MERCHANT_ALIAS_NAME_INDEX_SQL,
+    MERCHANT_ALIAS_DEDUPE_INDEX_SQL,
 ]

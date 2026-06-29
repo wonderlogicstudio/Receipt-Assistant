@@ -5,6 +5,10 @@ from typing import Iterable, Mapping
 
 from app.core.config import AppConfig
 from app.core.standard_ocr import StandardOCRResult
+from app.classifier.merchant_importer import MerchantImportResult
+from app.classifier.merchant_diagnostics import MerchantDictionarySummary, SavedReceiptDiagnosticSummary
+from app.db.merchant_repository import MerchantSearchRow
+from app.history.safe_diagnostics import ProcessingHistorySafetyDiagnostic
 from app.history.job_service import JobHistoryService
 from app.ui.history_utils import format_history_datetime
 
@@ -46,6 +50,83 @@ def build_paddle_smoke_result_summary(result: StandardOCRResult) -> dict[str, ob
         "warning_count": len(result.warnings),
         "warning_codes": warning_codes,
     }
+
+
+def build_merchant_import_result_rows(results: Iterable[MerchantImportResult]) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for result in results:
+        rows.append(
+            {
+                "file_name": Path(str(result.source_file_name or "merchant.csv").replace("\\", "/")).name,
+                "scanned_row_count": int(result.scanned_row_count),
+                "imported_row_count": int(result.imported_row_count),
+                "skipped_row_count": int(result.skipped_row_count),
+                "skipped_duplicate_row_count": int(result.skipped_duplicate_row_count),
+                "skipped_invalid_row_count": int(result.skipped_invalid_row_count),
+                "duplicate_file": bool(result.duplicate_file),
+                "elapsed_seconds": round(float(result.elapsed_seconds), 3),
+                "rows_per_second": round(float(result.rows_per_second), 2),
+                "source_batch_id": result.source_batch_id,
+            }
+        )
+    return rows
+
+
+def build_merchant_search_result_rows(results: Iterable[MerchantSearchRow]) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for result in results:
+        rows.append(
+            {
+                "merchant_name": sanitize_settings_display(result.merchant_name),
+                "branch_name": sanitize_settings_display(result.branch_name or "-"),
+                "category": sanitize_settings_display(_merchant_category_label(result)),
+                "road_name": sanitize_settings_display(result.road_name or "-"),
+                "building_number": sanitize_settings_display(_building_number_label(result)),
+                "road_hint": sanitize_settings_display(result.address_summary or "-"),
+                "business_number_present": bool(result.business_number),
+                "source": sanitize_settings_display(result.source),
+                "source_batch_id": sanitize_settings_display(result.source_batch_id or "-"),
+            }
+        )
+    return rows
+
+
+def build_merchant_dictionary_summary_rows(summary: MerchantDictionarySummary) -> list[dict[str, object]]:
+    values = summary.as_display_dict()
+    return [{"metric": key, "value": sanitize_settings_display(value)} for key, value in values.items()]
+
+
+def build_merchant_category_summary_rows(summary: MerchantDictionarySummary) -> list[dict[str, object]]:
+    return [
+        {
+            "category_large": sanitize_settings_display(item.category_large),
+            "row_count": int(item.row_count),
+        }
+        for item in summary.top_categories
+    ]
+
+
+def build_merchant_import_batch_summary_rows(summary: MerchantDictionarySummary) -> list[dict[str, object]]:
+    return [
+        {
+            "source_batch_id": sanitize_settings_display(item.source_batch_id),
+            "source_file_name": Path(str(item.source_file_name or "-").replace("\\", "/")).name,
+            "imported_row_count": int(item.imported_row_count),
+            "skipped_row_count": int(item.skipped_row_count),
+            "duplicate_file": bool(item.duplicate_file),
+            "created_at": item.created_at or "-",
+        }
+        for item in summary.recent_import_batches
+    ]
+
+
+def build_saved_receipt_diagnostic_summary_rows(summary: SavedReceiptDiagnosticSummary) -> list[dict[str, object]]:
+    values = summary.as_display_dict()
+    return [{"metric": key, "value": sanitize_settings_display(value)} for key, value in values.items()]
+
+
+def build_saved_receipt_diagnostic_sample_rows(summary: SavedReceiptDiagnosticSummary) -> list[dict[str, object]]:
+    return [dict(sanitize_settings_display(row)) for row in summary.sample_rows]
 
 
 def build_retention_settings_summary(config: AppConfig) -> dict[str, object]:
@@ -111,6 +192,15 @@ def build_history_connection_summary(service: JobHistoryService) -> dict[str, ob
     except Exception:
         return summary
     return summary
+
+
+def build_processing_history_safety_rows(
+    diagnostic: ProcessingHistorySafetyDiagnostic,
+) -> list[dict[str, object]]:
+    return [
+        {"metric": key, "value": sanitize_settings_display(value)}
+        for key, value in diagnostic.as_display_dict().items()
+    ]
 
 
 def format_bytes(value: object) -> str:
@@ -179,6 +269,23 @@ def _directory_summary(path: Path) -> dict[str, object]:
         except OSError:
             continue
     return {"file_count": file_count, "total_bytes": total_bytes, "status": "파일 없음" if file_count == 0 else "사용 중"}
+
+
+def _merchant_category_label(result: MerchantSearchRow) -> str:
+    values = [
+        value
+        for value in (result.category_large, result.category_medium, result.category_small)
+        if value
+    ]
+    return " / ".join(str(value) for value in values) or "-"
+
+
+def _building_number_label(result: MerchantSearchRow) -> str:
+    main_number = str(result.building_main_number or "").strip()
+    sub_number = str(result.building_sub_number or "").strip()
+    if main_number and sub_number and sub_number != "0":
+        return f"{main_number}-{sub_number}"
+    return main_number or "-"
 
 
 def _safe_files(path: Path) -> Iterable[Path]:

@@ -6,10 +6,12 @@ __pycache__/
 
 data/uploads/*
 data/outputs/*
+data/gov/*
 data/*.db
 data/app.db
 !data/uploads/.gitkeep
 !data/outputs/.gitkeep
+govdata/*
 
 output/*
 !output/.gitkeep

@@ -27,6 +27,7 @@ DEFAULT_PADDLE_USE_GPU = False
 DEFAULT_PADDLE_USE_ANGLE_CLS = False
 DEFAULT_PADDLE_LANG = "korean"
 DEFAULT_PADDLE_SHOW_LOG = False
+DEFAULT_NTS_BUSINESS_STATUS_API_URL = "https://api.odcloud.kr/api/nts-businessman/v1/status"
 
 
 @dataclass(frozen=True)
@@ -55,6 +56,8 @@ class AppConfig:
     paddle_use_angle_cls: bool = DEFAULT_PADDLE_USE_ANGLE_CLS
     paddle_lang: str = DEFAULT_PADDLE_LANG
     paddle_show_log: bool = DEFAULT_PADDLE_SHOW_LOG
+    nts_business_api_key: str | None = None
+    nts_business_status_api_url: str = DEFAULT_NTS_BUSINESS_STATUS_API_URL
 
 
 def get_config() -> AppConfig:
@@ -114,6 +117,12 @@ def get_config() -> AppConfig:
         paddle_use_angle_cls=_bool_env("PADDLE_USE_ANGLE_CLS", DEFAULT_PADDLE_USE_ANGLE_CLS),
         paddle_lang=os.getenv("PADDLE_LANG", DEFAULT_PADDLE_LANG).strip() or DEFAULT_PADDLE_LANG,
         paddle_show_log=_bool_env("PADDLE_SHOW_LOG", DEFAULT_PADDLE_SHOW_LOG),
+        nts_business_api_key=_optional_env("NTS_BUSINESS_API_KEY"),
+        nts_business_status_api_url=os.getenv(
+            "NTS_BUSINESS_STATUS_API_URL",
+            DEFAULT_NTS_BUSINESS_STATUS_API_URL,
+        ).strip()
+        or DEFAULT_NTS_BUSINESS_STATUS_API_URL,
     )
 
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import date
+from types import SimpleNamespace
 
 from app.core.enums import CardMatchStatus, EvidenceType, ReviewStatus
 from app.core.receipt_models import ReceiptRecord
@@ -16,8 +17,11 @@ from app.ui.review_utils import (
     COL_GROSS_AMOUNT,
     COL_AMOUNT_SOURCE,
     COL_AMOUNT_WARNINGS,
+    COL_BUSINESS_STATUS,
     COL_INCLUDED,
     COL_MERCHANT,
+    COL_MERCHANT_CANDIDATE,
+    COL_MERCHANT_CANDIDATE_SCORE,
     COL_PAID_AMOUNT,
     COL_MISSING_FIELDS,
     COL_QUALITY_FLAGS,
@@ -153,6 +157,9 @@ def test_review_dataframe_contains_required_display_columns():
         COL_MISSING_FIELDS,
         COL_QUALITY_FLAGS,
         COL_MERCHANT,
+        COL_MERCHANT_CANDIDATE,
+        COL_MERCHANT_CANDIDATE_SCORE,
+        COL_BUSINESS_STATUS,
         COL_TOTAL,
         COL_GROSS_AMOUNT,
         COL_DISCOUNT_AMOUNT,
@@ -176,6 +183,81 @@ def test_review_dataframe_contains_required_display_columns():
         COL_SOURCE_PREVIEW,
     }
     assert expected_columns.issubset(set(dataframe.columns))
+
+
+def test_review_dataframe_shows_merchant_candidate_as_read_only_hint():
+    class FakeMatcher:
+        def find_candidates(self, *, merchant_name=None, business_number=None, address_hint=None):
+            return [
+                SimpleNamespace(
+                    candidate_merchant_name="후보상호",
+                    candidate_business_number="123-45-67890",
+                    score=100,
+                    match_type="business_number_exact",
+                )
+            ]
+
+    dataframe = receipt_records_to_review_dataframe([make_receipt()], merchant_matcher=FakeMatcher())
+
+    assert "후보상호" in dataframe.loc[0, COL_MERCHANT_CANDIDATE]
+    assert dataframe.loc[0, COL_MERCHANT_CANDIDATE_SCORE] == "100"
+    assert dataframe.loc[0, COL_BUSINESS_STATUS] == "not_checked"
+
+
+def test_review_dataframe_candidate_does_not_overwrite_merchant_name():
+    class FakeMatcher:
+        def find_candidates(self, *, merchant_name=None, business_number=None, address_hint=None):
+            return [
+                SimpleNamespace(
+                    candidate_merchant_name="후보상호",
+                    candidate_business_number=None,
+                    score=91,
+                    match_type="master_fuzzy",
+                )
+            ]
+
+    receipt = make_receipt()
+    dataframe = receipt_records_to_review_dataframe([receipt], merchant_matcher=FakeMatcher())
+
+    updated = review_dataframe_to_receipt_records(dataframe, [receipt])[0]
+
+    assert updated.merchant_name == receipt.merchant_name
+
+
+def test_review_dataframe_passes_address_hint_to_merchant_matcher():
+    captured: dict[str, object] = {}
+
+    class FakeMatcher:
+        def find_candidates(self, *, merchant_name=None, business_number=None, address_hint=None):
+            captured["address_hint"] = address_hint
+            return [
+                SimpleNamespace(
+                    candidate_merchant_name="주소후보상호",
+                    candidate_business_number=None,
+                    score=88,
+                    match_type="master_fuzzy",
+                    address_summary="이화여대길 52-31",
+                )
+            ]
+
+    receipt = make_receipt()
+    address_hint = {
+        "road_address_hint": "서울특별시 서대문구 이화여대길 52-31",
+        "road_name": "이화여대길",
+        "building_main_number": "52",
+        "building_sub_number": "31",
+    }
+
+    dataframe = receipt_records_to_review_dataframe(
+        [receipt],
+        merchant_matcher=FakeMatcher(),
+        merchant_address_hints={receipt.id: address_hint},
+    )
+    updated = review_dataframe_to_receipt_records(dataframe, [receipt])[0]
+
+    assert captured["address_hint"] == address_hint
+    assert "이화여대길 52-31" in dataframe.loc[0, COL_MERCHANT_CANDIDATE]
+    assert updated.merchant_name == receipt.merchant_name
 
 
 def test_review_dataframe_shows_discount_amount_fields_as_read_only_context():

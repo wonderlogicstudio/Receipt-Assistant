@@ -428,3 +428,182 @@ Rollback or correction is required if any of the following occur:
   Excel output.
 - Default pytest runs real Azure or real PaddleOCR, downloads OCR models, or
   requires `paddleocr`.
+
+## Merchant Candidate Dictionary Change Control
+
+- Adding merchant candidate tables is allowed only as separate dictionary data.
+  Existing `receipt_records`, `processing_jobs`, and ExcelExporter contracts must
+  remain compatible.
+- Public store CSV import may store merchant name, branch name, coarse area hint,
+  category names, source row hash, and batch id only.
+- `merchant_master.business_number` must remain nullable because public store
+  data is not a full business-number source.
+- Candidate matching may rank business-number exact, alias, and fuzzy name
+  candidates, but must return review-required hints only.
+- NTS business status API may be used only for OCR-detected business numbers and
+  must read `NTS_BUSINESS_API_KEY` from `.env`.
+
+Rollback or correction is required if any of the following occur:
+
+- Representative names, phone raw values, full addresses, full OCR text,
+  provider raw JSON, raw API responses, full local paths, secrets, or tracebacks
+  are stored or displayed.
+- Merchant candidates automatically overwrite receipt merchant name, business
+  number, or review status.
+- Private site crawling, mass business-number collection, true-name verification,
+  tax judgment, ExcelExporter sheet/column changes, or Processing History receipt
+  schema changes are introduced in this step.
+
+## Merchant Road Address Hint Change Control
+
+- Public merchant CSV import may read only `상호명`, `지점명`, category columns,
+  `도로명`, `건물본번지`, `건물부번지`, `건물명`, and `도로명주소`.
+- Road-address fields may be stored in `merchant_master` for matching hints and
+  duplicate detection.
+- OCR-derived road-address hints may be extracted only from safe parser lines and
+  used as transient candidate scoring inputs.
+- Same-file detection must use allowed-column content only so unrelated CSV
+  columns do not affect duplicate decisions.
+- The Settings UI may import multiple CSV files sequentially but must retain no
+  original CSV file after import.
+- The Settings UI may raise the Streamlit browser-upload limit to 400MB per CSV
+  file, but larger files must be rejected safely and the CLI path should remain
+  the preferred path for near-limit imports.
+
+Rollback or correction is required if any of the following occur:
+
+- Representative names, phone raw values, raw CSV rows, full local paths, OCR raw
+  text, provider raw JSON, or API keys are stored or displayed.
+- Full address candidates are added to Excel output or used as automatic
+  confirmation.
+- Address-only matches overwrite `ReceiptRecord.merchant_name`,
+  `business_number`, or `review_status`.
+- OCR-derived address hints are stored in `ReceiptRecord`, Excel output,
+  Processing History receipt rows, logs, or raw parser warnings.
+- Phone, representative, business-number, approval/card, amount, or date lines
+  are treated as address hints.
+- Public CSV originals under `data/gov` or `govdata` are committed.
+- Files larger than the configured 400MB UI limit are imported, retained, or
+  reported with full local paths instead of a safe skip/error.
+
+## Merchant Review Alias Learning Change Control
+
+- Review alias learning may add safe reviewed merchant names to
+  `merchant_alias` with `source=review`.
+- It may link aliases to `merchant_master` only when business-number exact,
+  normalized merchant-name exact, or a high-confidence master name match is
+  available.
+- It must skip uncertain master links by keeping `merchant_master_id` nullable.
+- It must skip empty names, too-short names, mostly numeric/symbolic values,
+  business-number patterns, phone-number patterns, representative labels,
+  amount lines, dates, card identifiers, and approval identifiers.
+- Repeated review saves must not keep appending the same
+  `normalized_alias_name + business_number + source` row.
+
+Rollback or correction is required if any of the following occur:
+
+- Learned aliases automatically overwrite future `ReceiptRecord.merchant_name`,
+  `business_number`, or `review_status`.
+- Alias learning changes ExcelExporter sheets/columns or existing Processing
+  History receipt schema.
+- Raw OCR text, provider raw JSON, full local paths, representative names, phone
+  raw values, full addresses, API keys, or raw tracebacks are stored or shown.
+- Alias learning failure blocks review save, Excel generation, or download.
+- Private crawling, mass business-number collection, NTS automatic calls, or
+  OpenAI automatic correction are introduced in this step.
+
+## Public Merchant CSV Import Performance Change Control
+
+- Public merchant CSV import may use chunked `executemany` and one transaction
+  per import batch.
+- Import-time SQLite PRAGMA settings are allowed only for safe local bulk import
+  performance, such as WAL, `synchronous=NORMAL`, and `temp_store=MEMORY`.
+- Import result summaries may include file name, batch id, scanned/imported/
+  skipped counts, duplicate-file status, elapsed seconds, and rows per second.
+- Duplicate-file detection must continue to use allowed-column content hash.
+- Duplicate-row detection must continue to use allowed-column row hash.
+
+Rollback or correction is required if any of the following occur:
+
+- A failed import leaves partial `merchant_master` rows or duplicate source logs.
+- CLI/UI summaries expose full local paths, raw CSV rows, representative names,
+  phone raw values, blocked columns, OCR raw text, provider raw JSON, API keys,
+  or raw tracebacks.
+- Bulk import changes existing `ReceiptRecord`, ExcelExporter, or Processing
+  History receipt schemas.
+- Address or merchant candidates become automatically confirmed.
+- Public CSV originals under `data/gov` or `govdata` are committed.
+
+## Merchant Dictionary Diagnostics Change Control
+
+- Merchant diagnostics may read `merchant_master`, `merchant_alias`,
+  `merchant_source_log`, and safe Processing History receipt fields.
+- Dictionary summaries may show counts, latest import date, latest source file
+  name, top category counts, duplicate-file count, and recent batch summaries.
+- Candidate diagnostics may call the existing matcher only after explicit user
+  action and must keep candidates as review-required hints.
+- Saved ReceiptRecord diagnostics may use only merchant name, business number,
+  source file name, and review status, and should report aggregate counts first.
+- Business numbers shown by diagnostics must be masked as `123-**-*****`.
+
+Rollback or correction is required if any of the following occur:
+
+- Diagnostics automatically confirm, overwrite, or save merchant candidates.
+- Diagnostics change `ReceiptRecord`, ExcelExporter sheets/columns, Processing
+  History schema, matcher thresholds, default provider, NTS behavior, or OpenAI
+  correction behavior.
+- Raw OCR text, provider raw JSON, full local paths, phone raw values,
+  representative names, raw CSV rows, API keys, raw tracebacks, or secrets are
+  stored or displayed.
+- Saved-record diagnostics run automatically over large history without an
+  explicit button action.
+- Business numbers are displayed in full instead of masked.
+## Merchant Dictionary Search and Candidate Scoring Change Control
+
+Allowed changes:
+
+- Add a manual Settings search over `merchant_master` using bounded merchant-name
+  or road-name/building-number filters.
+- Add indexes that only support merchant dictionary search/matching and do not
+  alter existing Processing History receipt/export schemas.
+- Lower scores for very short substring fuzzy candidates unless a safe address
+  hint boosts the candidate above the review threshold.
+- Reduce review source preview rendering cost by showing only the selected row.
+
+Rollback or correction is required if any of the following occur:
+
+- Search or diagnostics expose full local paths, raw CSV rows, OCR raw text,
+  provider raw JSON, representative names, phone raw values, API keys, raw
+  tracebacks, or full business numbers.
+- Merchant candidates automatically overwrite `ReceiptRecord.merchant_name`,
+  `business_number`, `review_status`, Excel output, or Processing History rows.
+- Search performs blank full-table browsing by default or makes Settings
+  unusably slow on the public merchant database.
+
+## Quality Stabilization and Review Diagnostics Change Control
+
+Allowed changes:
+
+- Add safe, manual Processing History diagnostics that report counts only.
+- Add safe performance summaries for review dataframe generation, merchant
+  candidate lookup/cache, selected source preview preparation, and merchant DB
+  search query timing.
+- Manually verify real PaddleOCR samples outside default pytest and report only
+  safe field summaries.
+- Improve selected source preview rendering and thumbnail preparation without
+  changing review editing semantics.
+
+Rollback or correction is required if any of the following occur:
+
+- Default pytest calls real PaddleOCR, downloads OCR models, or requires live OCR
+  provider access.
+- Diagnostics or sample reports expose raw OCR text, provider raw JSON, full
+  local paths, raw CSV rows, phone raw values, representative names, API keys,
+  raw tracebacks, or full business numbers.
+- Performance diagnostics write raw OCR/provider/CSV payloads to DB, UI, logs,
+  tests, or Excel output.
+- The change modifies existing `ReceiptRecord`, ExcelExporter sheets/columns, or
+  Processing History schemas.
+- Merchant/address candidates become automatically confirmed or overwrite saved
+  receipt rows.
+- NTS API calls or OpenAI correction are triggered automatically.

@@ -1230,3 +1230,210 @@ The preview contract does not change review editing, exclusion handling,
 ExcelExporter output, Processing History schema, default provider behavior,
 automatic fallback, formal scoring, mobile/PWA behavior, OCR provider behavior,
 or PaddleOCR accuracy rules.
+
+## 12. Merchant candidate dictionary
+
+Merchant dictionary data is a review-candidate aid. It must not be treated as a
+confirmed national merchant or business-number database.
+
+SQLite tables:
+
+```text
+merchant_master
+- id TEXT PRIMARY KEY
+- merchant_name TEXT NOT NULL
+- normalized_merchant_name TEXT NOT NULL
+- business_number TEXT NULL
+- branch_name TEXT NULL
+- area_hint TEXT NULL
+- category_large TEXT NULL
+- category_medium TEXT NULL
+- category_small TEXT NULL
+- road_name TEXT NULL
+- building_main_number TEXT NULL
+- building_sub_number TEXT NULL
+- building_name TEXT NULL
+- road_address TEXT NULL
+- normalized_road_address TEXT NULL
+- source TEXT NOT NULL
+- source_row_hash TEXT NOT NULL
+- source_batch_id TEXT NOT NULL
+- review_required INTEGER NOT NULL DEFAULT 1
+- created_at TEXT NOT NULL
+- updated_at TEXT NOT NULL
+
+merchant_alias
+- id TEXT PRIMARY KEY
+- merchant_master_id TEXT NULL
+- alias_name TEXT NOT NULL
+- normalized_alias_name TEXT NOT NULL
+- business_number TEXT NULL
+- source TEXT NOT NULL
+- created_at TEXT NOT NULL
+
+merchant_source_log
+- id TEXT PRIMARY KEY
+- source_name TEXT NOT NULL
+- source_file_name TEXT NULL
+- source_file_hash TEXT NULL
+- source_batch_id TEXT NOT NULL
+- imported_row_count INTEGER NOT NULL DEFAULT 0
+- skipped_row_count INTEGER NOT NULL DEFAULT 0
+- duplicate_file INTEGER NOT NULL DEFAULT 0
+- note TEXT NULL
+- created_at TEXT NOT NULL
+```
+
+CSV import stores only merchant name, branch name, category names, road name,
+building main/sub number, building name, road address, source row hash, allowed
+column file hash, and import batch id. It must not store representative names,
+phone raw values, full OCR text, provider raw JSON, raw source rows, or full
+local paths.
+
+Import result summary:
+
+```text
+source_file_name
+source_batch_id
+scanned_row_count
+imported_row_count
+skipped_row_count
+skipped_duplicate_row_count
+skipped_invalid_row_count
+duplicate_file
+elapsed_seconds
+rows_per_second
+```
+
+This summary is for CLI/UI diagnostics only. It must show file names only, not
+full local paths, raw CSV rows, representative names, phone raw values, or
+blocked columns.
+
+Candidate DTO:
+
+```text
+candidate_merchant_name
+candidate_business_number
+score
+match_type
+source
+review_required=True
+address_summary
+```
+
+Matching priority:
+
+1. Business-number exact match, score 100.
+2. Alias exact/fuzzy matches before master name matches.
+3. Master exact match score 90.
+4. Fuzzy name candidates above the configured threshold, default 72.
+5. If an OCR address hint is available, road-name/building-number or normalized
+   road-address matches may boost the candidate score. Address hints never
+   confirm a candidate by themselves.
+6. If merchant name and business number are missing but a structured road-name
+   and building-number hint exactly matches `merchant_master`, the matcher may
+   return low-score address-only review candidates. These candidates are hints
+   only and remain below the fuzzy-name confirmation threshold.
+
+Candidates do not automatically overwrite `ReceiptRecord.merchant_name`,
+`business_number`, or `review_status`. ExcelExporter sheets and columns remain
+unchanged, and candidate details are not exported.
+
+OCR address hints are extracted only from safe parser lines and may contain
+`road_address_hint`, `road_name`, `building_main_number`, and
+`building_sub_number`. They are transient review-candidate scoring inputs, not
+`ReceiptRecord` fields. Full OCR raw text, provider raw JSON, phone lines,
+representative lines, business-number lines, approval/card identifiers, dates,
+and amount lines must not become address hints.
+
+NTS business status lookup reads `NTS_BUSINESS_API_KEY` from `.env`. It is
+limited to OCR-detected business numbers and stores/displays only safe summary
+fields: normalized business number, status category, tax type category, closed
+date if present, and diagnostic code. It is not a mass collection or tax
+judgment feature.
+
+Review alias learning:
+
+- Reviewed merchant names may be added to `merchant_alias` with `source=review`
+  when the user creates the reviewed Excel output.
+- If the original parsed merchant name differs from the reviewed merchant name,
+  the original parsed merchant name may also be added as an alias.
+- Alias rows store only `alias_name`, `normalized_alias_name`,
+  nullable `merchant_master_id`, nullable normalized `business_number`,
+  `source`, and timestamps.
+- Empty names, too-short names, mostly numeric/symbolic values, business-number
+  patterns, phone-number patterns, representative/owner labels, amount lines,
+  date lines, card identifiers, and approval identifiers are not stored.
+- Duplicate `normalized_alias_name + business_number + source` combinations are
+  skipped.
+- Alias rows improve future candidate ranking only. They do not automatically
+  confirm or overwrite `ReceiptRecord` fields, ExcelExporter output, or
+  Processing History receipt rows.
+
+Merchant diagnostics:
+
+- Merchant dictionary diagnostics are read-only operator helpers.
+- Dictionary summary may show merchant master count, alias count, import batch
+  count, duplicate file count, latest import date, latest source file name, top
+  category counts, and recent import batch summaries.
+- Candidate diagnostic output may show candidate merchant name, masked business
+  number, business-number presence flag, score, match type, source,
+  `review_required`, and safe address summary.
+- Business numbers are masked as `123-**-*****`.
+- Saved ReceiptRecord diagnostics may use only `merchant_name`,
+  `business_number`, `source_file_name`, and `review_status`.
+- Saved-record diagnostic output is aggregate-first: candidate present/missing
+  counts, exact/fuzzy/alias match counts, score buckets, and review-required
+  count.
+- Diagnostics must not include raw OCR text, provider raw JSON, full local
+  paths, representative names, phone raw values, API keys, or raw CSV rows.
+- Diagnostics never update `ReceiptRecord`, ExcelExporter sheets/columns,
+  Processing History schema, or review status.
+## Merchant Dictionary Search and Short Candidate Scoring
+
+Merchant dictionary search is an operator-only Settings helper. It may query
+`merchant_master` by merchant-name prefix or by road-name plus building number.
+It returns safe summaries only and must not change `ReceiptRecord`, ExcelExporter
+sheets/columns, Processing History schema, or review status.
+
+Search output contract:
+
+```text
+merchant_name
+branch_name
+category
+road_name
+building_number
+road_hint
+business_number_present
+source
+source_batch_id
+query_elapsed_ms
+result_count
+limit
+```
+
+Search output must not include full local paths, raw CSV rows, full road-address
+payload dumps, raw OCR text, provider raw JSON, representative names, phone raw
+values, API keys, raw tracebacks, or full business numbers.
+
+Fuzzy candidate scoring keeps business-number exact and alias priority rules.
+Very short substring matches, such as a two- or three-character public merchant
+name inside a longer OCR merchant name, stay below the default fuzzy threshold
+unless an address hint safely boosts the candidate. Address support remains a
+review hint only and never auto-confirms a merchant.
+
+Quality stabilization diagnostics:
+
+- Real PaddleOCR sample checks are manual/opt-in and must not run in default
+  pytest.
+- Sample reports compare visual receipt fields against current parser output
+  using safe summaries only.
+- Processing History safety diagnostics are read-only and count forbidden
+  columns/path-like values without showing the values themselves.
+- Review performance summaries may show dataframe generation time, merchant
+  candidate lookup time, cache hit/miss counts, preview preparation time, and
+  merchant DB search query time.
+- These diagnostics never change `ReceiptRecord`, ExcelExporter sheets/columns,
+  Processing History schema, merchant candidates, NTS behavior, or OpenAI
+  behavior.

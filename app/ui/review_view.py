@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+import time
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 import streamlit as st
 
+from app.classifier.merchant_candidate import MerchantCandidateMatcher
 from app.core.config import get_config
 from app.core.receipt_models import ReceiptRecord
+from app.db.merchant_repository import MerchantRepository
 from app.ui.review_utils import (
+    COL_BUSINESS_STATUS,
     COL_CARD_MATCH_REASON,
     COL_CARD_MATCH_STATUS,
     COL_DATE,
@@ -20,6 +25,8 @@ from app.ui.review_utils import (
     COL_GROSS_AMOUNT,
     COL_INCLUDED,
     COL_MERCHANT,
+    COL_MERCHANT_CANDIDATE,
+    COL_MERCHANT_CANDIDATE_SCORE,
     COL_PAID_AMOUNT,
     COL_PAYMENT,
     COL_RECOMMENDED_CATEGORY,
@@ -51,7 +58,11 @@ from app.ui.review_utils import (
 from app.ui.summary_view import render_review_summary
 
 
-def render_review_view(records: list[ReceiptRecord]) -> list[ReceiptRecord]:
+def render_review_view(
+    records: list[ReceiptRecord],
+    *,
+    merchant_address_hints: dict[str, object] | None = None,
+) -> list[ReceiptRecord]:
     if not records:
         st.info("먼저 파일을 업로드하고 처리해 주세요.")
         return []
@@ -77,7 +88,18 @@ def render_review_view(records: list[ReceiptRecord]) -> list[ReceiptRecord]:
         return records
 
     sorted_filtered_records = sort_receipt_records_for_review(filtered_records)
-    dataframe = receipt_records_to_review_dataframe(sorted_filtered_records)
+    merchant_matcher = _build_merchant_matcher()
+    address_hints = merchant_address_hints or st.session_state.get("merchant_address_hints") or {}
+    dataframe_started_at = time.perf_counter()
+    dataframe = receipt_records_to_review_dataframe(
+        sorted_filtered_records,
+        merchant_matcher=merchant_matcher,
+        merchant_address_hints=address_hints,
+    )
+    st.session_state["review_dataframe_elapsed_ms"] = int(
+        (time.perf_counter() - dataframe_started_at) * 1000
+    )
+    _render_review_performance_caption()
     selected_record = _render_review_source_selection(dataframe, sorted_filtered_records)
     if selected_record is not None:
         _render_review_detail_panel(selected_record)
@@ -161,7 +183,7 @@ def _render_review_source_selection(dataframe: pd.DataFrame, records: list[Recei
     with preview_columns[0]:
         st.caption("선택행 하이라이트")
         st.dataframe(
-            _style_selected_review_dataframe(dataframe, selected_id),
+            _selected_review_dataframe(dataframe, selected_id),
             key="receipt_review_selection_preview",
             use_container_width=True,
             hide_index=True,
@@ -171,6 +193,15 @@ def _render_review_source_selection(dataframe: pd.DataFrame, records: list[Recei
     with preview_columns[1]:
         _render_source_preview(selected_record)
     return selected_record
+
+
+def _selected_review_dataframe(dataframe: pd.DataFrame, selected_receipt_id: str | None) -> pd.DataFrame:
+    if "__receipt_id" not in dataframe.columns:
+        return dataframe.head(1).copy()
+    selected = dataframe[dataframe["__receipt_id"].astype(str) == str(selected_receipt_id or "")]
+    if selected.empty:
+        return dataframe.head(1).copy()
+    return selected.head(1).copy()
 
 
 def _render_review_detail_panel(selected_record: ReceiptRecord) -> None:
@@ -200,7 +231,10 @@ def _render_source_preview(record: ReceiptRecord | None) -> None:
         upload_relative_root=config.upload_relative_root,
     )
     if preview.is_image:
-        st.image(str(preview.path), caption=preview.source_file_name, use_container_width=True)
+        started_at = time.perf_counter()
+        payload = _preview_image_payload(preview.path)
+        st.session_state["review_preview_elapsed_ms"] = int((time.perf_counter() - started_at) * 1000)
+        st.image(payload, caption=preview.source_file_name, use_container_width=True)
         return
     st.info(preview.message or "원본 미리보기를 사용할 수 없습니다.")
     st.caption(f"원본파일명: {preview.source_file_name}")
@@ -261,6 +295,9 @@ def _column_config() -> dict[str, object]:
         ),
         COL_DUPLICATE_SUSPECTED: st.column_config.CheckboxColumn(COL_DUPLICATE_SUSPECTED),
         COL_MERCHANT: st.column_config.TextColumn(COL_MERCHANT),
+        COL_MERCHANT_CANDIDATE: st.column_config.TextColumn(COL_MERCHANT_CANDIDATE),
+        COL_MERCHANT_CANDIDATE_SCORE: st.column_config.TextColumn(COL_MERCHANT_CANDIDATE_SCORE),
+        COL_BUSINESS_STATUS: st.column_config.TextColumn(COL_BUSINESS_STATUS),
         COL_PAYMENT: st.column_config.TextColumn(COL_PAYMENT),
         COL_EXPENSE_CATEGORY: st.column_config.TextColumn(COL_EXPENSE_CATEGORY),
         COL_USER_NOTE: st.column_config.TextColumn(COL_USER_NOTE),
@@ -272,3 +309,105 @@ def _column_config() -> dict[str, object]:
         COL_SOURCE_PREVIEW: st.column_config.TextColumn(COL_SOURCE_PREVIEW),
     }
     return {**visible_columns, **hidden_columns}
+
+
+def _build_merchant_matcher() -> MerchantCandidateMatcher | None:
+    try:
+        config = get_config()
+        repository = MerchantRepository(config=config)
+        cache = st.session_state.setdefault("merchant_candidate_cache", {})
+        if not isinstance(cache, dict):
+            cache = {}
+            st.session_state["merchant_candidate_cache"] = cache
+        metrics = st.session_state.setdefault("review_performance_summary", {})
+        if not isinstance(metrics, dict):
+            metrics = {}
+            st.session_state["review_performance_summary"] = metrics
+        return _SessionCachedMerchantMatcher(MerchantCandidateMatcher(repository), cache, metrics)
+    except Exception:
+        return None
+
+
+class _SessionCachedMerchantMatcher:
+    def __init__(
+        self,
+        matcher: MerchantCandidateMatcher,
+        cache: dict[tuple[str, str, str], list[Any]],
+        metrics: dict[str, object] | None = None,
+    ) -> None:
+        self.matcher = matcher
+        self.cache = cache
+        self.metrics = metrics
+
+    def find_candidates(
+        self,
+        *,
+        merchant_name: object = None,
+        business_number: object = None,
+        address_hint: object = None,
+    ) -> list[Any]:
+        key = (_cache_text(merchant_name), _cache_text(business_number), _cache_text(address_hint))
+        started_at = time.perf_counter()
+        if key in self.cache:
+            _increment_review_metric(self.metrics, "candidate_cache_hit_count")
+            result = self.cache[key]
+        else:
+            _increment_review_metric(self.metrics, "candidate_cache_miss_count")
+            result = self.matcher.find_candidates(
+                merchant_name=merchant_name,
+                business_number=business_number,
+                address_hint=address_hint,
+            )
+            self.cache[key] = result
+        _increment_review_metric(self.metrics, "candidate_lookup_count")
+        _increment_review_metric(
+            self.metrics,
+            "candidate_lookup_elapsed_ms",
+            int((time.perf_counter() - started_at) * 1000),
+        )
+        return result
+
+
+def _increment_review_metric(metrics: dict[str, object] | None, key: str, value: int = 1) -> None:
+    if metrics is None:
+        return
+    try:
+        metrics[key] = int(metrics.get(key, 0) or 0) + int(value)
+    except Exception:
+        metrics[key] = int(value)
+
+
+def _render_review_performance_caption() -> None:
+    metrics = st.session_state.get("review_performance_summary")
+    if not isinstance(metrics, dict):
+        metrics = {}
+    dataframe_ms = int(st.session_state.get("review_dataframe_elapsed_ms", 0) or 0)
+    preview_ms = int(st.session_state.get("review_preview_elapsed_ms", 0) or 0)
+    st.caption(
+        "Review perf: "
+        f"dataframe {dataframe_ms}ms, "
+        f"candidate lookup {int(metrics.get('candidate_lookup_count', 0) or 0)} calls/"
+        f"{int(metrics.get('candidate_lookup_elapsed_ms', 0) or 0)}ms, "
+        f"cache hit {int(metrics.get('candidate_cache_hit_count', 0) or 0)}, "
+        f"preview prep {preview_ms}ms"
+    )
+
+
+def _cache_text(value: object) -> str:
+    if isinstance(value, dict):
+        return "|".join(f"{key}={value.get(key) or ''}" for key in sorted(value))
+    return str(value or "")
+
+
+def _preview_image_payload(path: Path | None) -> object:
+    if path is None:
+        return ""
+    try:
+        from PIL import Image, ImageOps
+
+        image = Image.open(path)
+        image = ImageOps.exif_transpose(image)
+        image.thumbnail((1400, 1400))
+        return image.copy()
+    except Exception:
+        return ""

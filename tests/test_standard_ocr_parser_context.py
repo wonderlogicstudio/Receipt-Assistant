@@ -233,6 +233,49 @@ def test_context_payload_passes_forbidden_payload_guard() -> None:
     assert_no_forbidden_ocr_payload(context.model_dump(mode="json"))
 
 
+def test_context_extracts_address_hint_from_safe_lines() -> None:
+    result = StandardOCRResult(
+        id="standard_ocr_address_hint",
+        provider="paddleocr",
+        status="completed",
+        text_blocks=[
+            StandardOCRTextBlock(page_index=0, block_id="b001", text="상호명 테스트상점"),
+            StandardOCRTextBlock(page_index=0, block_id="b002", text="주소 서울특별시 서대문구 이화여대길 52-31"),
+        ],
+        key_value_candidates=[],
+        created_at=datetime.fromisoformat("2026-05-14T21:00:00+09:00"),
+    )
+
+    context = build_parser_context_from_standard_ocr(result)
+
+    assert context.address_hint == {
+        "road_address_hint": "서울특별시 서대문구 이화여대길 52-31",
+        "road_name": "이화여대길",
+        "building_main_number": "52",
+        "building_sub_number": "31",
+    }
+
+
+def test_context_does_not_extract_forbidden_numeric_lines_as_address_hint() -> None:
+    result = StandardOCRResult(
+        id="standard_ocr_no_address_hint",
+        provider="paddleocr",
+        status="completed",
+        text_blocks=[
+            StandardOCRTextBlock(page_index=0, block_id="b001", text="사업자번호 123-45-67890"),
+            StandardOCRTextBlock(page_index=0, block_id="b002", text="전화 02-1234-5678"),
+            StandardOCRTextBlock(page_index=0, block_id="b003", text="합계금액 50,000원"),
+            StandardOCRTextBlock(page_index=0, block_id="b004", text="거래일자 2026-06-10"),
+        ],
+        key_value_candidates=[],
+        created_at=datetime.fromisoformat("2026-05-14T21:00:00+09:00"),
+    )
+
+    context = build_parser_context_from_standard_ocr(result)
+
+    assert context.address_hint is None
+
+
 def _context_from_fixture(fixture_name: str) -> StandardOCRParserContext:
     return build_parser_context_from_standard_ocr(_standard_result_from_fixture(fixture_name))
 
