@@ -225,7 +225,7 @@ def test_process_receipt_files_keeps_address_hint_as_transient_matching_data():
     assert "private" not in str(result.merchant_address_hints)
 
 
-def test_process_receipt_files_applies_noisy_known_merchant_normalization():
+def test_process_receipt_files_preserves_observed_name_without_dictionary_cleanup():
     metadata = StoredFileMetadata(
         original_file_name="playworld.jpg",
         stored_file_name="playworld.jpg",
@@ -249,13 +249,13 @@ def test_process_receipt_files_applies_noisy_known_merchant_normalization():
 
     assert not result.errors
     receipt = result.receipt_records[0]
-    assert receipt.merchant_name == "플레이월드 파주점"
+    assert receipt.merchant_name == "어스즈 플레이월드 파주점 STO"
     assert receipt.business_number == "503-33-22495"
     assert receipt.transaction_date and receipt.transaction_date.isoformat() == "2026-06-06"
     assert receipt.total_amount == 61000
 
 
-def test_process_receipt_files_normalizes_noisy_known_merchant_without_candidates():
+def test_process_receipt_files_preserves_observed_name_without_candidates():
     metadata = StoredFileMetadata(
         original_file_name="playworld_no_candidates.jpg",
         stored_file_name="playworld_no_candidates.jpg",
@@ -278,7 +278,7 @@ def test_process_receipt_files_normalizes_noisy_known_merchant_without_candidate
 
     assert not result.errors
     receipt = result.receipt_records[0]
-    assert receipt.merchant_name == "플레이월드 파주점"
+    assert receipt.merchant_name == "어스즈 플레이월드 파주점 STO"
     assert receipt.transaction_date and receipt.transaction_date.isoformat() == "2026-06-06"
     assert receipt.total_amount == 61000
 
@@ -376,7 +376,7 @@ def test_process_receipt_files_keeps_livestock_distribution_merchant_and_approva
     assert receipt.total_amount == 107000
 
 
-def test_process_receipt_files_recovers_noisy_hotel_datetime_and_split_tax_total():
+def test_process_receipt_files_preserves_observed_hotel_name_without_inventing_tax_total():
     metadata = StoredFileMetadata(
         original_file_name="hotel_split_tax.jpg",
         stored_file_name="hotel_split_tax.jpg",
@@ -408,12 +408,12 @@ def test_process_receipt_files_recovers_noisy_hotel_datetime_and_split_tax_total
 
     assert not result.errors
     receipt = result.receipt_records[0]
-    assert receipt.merchant_name == "한화호텔앤드리조트(주) 설악"
+    assert receipt.merchant_name == "한화호텔앤드리조트(주) / 설악"
     assert receipt.transaction_date and receipt.transaction_date.isoformat() == "2026-05-25"
     assert receipt.business_number == "101-81-30747"
-    assert receipt.total_amount == 723000
-    assert receipt.supply_amount == 657272
-    assert receipt.vat_amount == 65728
+    assert receipt.total_amount != 723000
+    assert receipt.supply_amount is None
+    assert receipt.vat_amount is None
 
 
 class FakeStandardOCRProvider:

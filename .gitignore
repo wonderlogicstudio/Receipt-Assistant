@@ -1,5 +1,7 @@
 .env
 .venv/
+.venv-ocr/
+.venv-paddle-v5/
 __pycache__/
 *.py[cod]
 .pytest_cache/
@@ -8,6 +10,9 @@ data/uploads/*
 data/outputs/*
 data/gov/*
 data/*.db
+data/*.db-wal
+data/*.db-shm
+data/paddle_v5/
 data/app.db
 !data/uploads/.gitkeep
 !data/outputs/.gitkeep

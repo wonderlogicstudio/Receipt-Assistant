@@ -9,7 +9,6 @@ from typing import Iterable, MutableMapping, Sequence
 import pandas as pd
 import streamlit as st
 
-from app.classifier.merchant_alias_learning import MerchantAliasLearningResult, MerchantAliasLearningService
 from app.core.config import get_config
 from app.core.card_models import CardParseResult, CardTransaction
 from app.core.exceptions import ConfigurationError, FileStoreError, MissingRequiredColumnsError, ReceiptAssistantError
@@ -17,14 +16,12 @@ from app.core.enums import OCRStatus
 from app.core.ocr_models import OCRResult
 from app.core.receipt_models import ReceiptRecord
 from app.core.standard_ocr import StandardOCRResult
-from app.db.merchant_repository import MerchantRepository
 from app.exporter.excel_exporter import ExcelExporter
 from app.history.job_service import JobHistoryService
 from app.ocr.base import OCRProvider
 from app.ocr.paddle_provider import get_paddle_device_diagnostics
 from app.ocr.provider_factory import get_ocr_provider
 from app.parser.card_statement_parser import CardStatementParser
-from app.parser.receipt_anchors import apply_sample_receipt_anchor
 from app.parser.receipt_parser import ReceiptParser, parse_amount, parse_date
 from app.parser.standard_ocr_context import build_parser_context_from_standard_ocr
 from app.storage.file_store import FileStore, StoredFileMetadata
@@ -149,7 +146,6 @@ def render_new_job_view() -> None:
                 st.session_state["card_transactions"] = result.card_transactions
                 st.session_state["receipt_records"] = result.receipt_records
                 st.session_state["reviewed_receipt_records"] = result.receipt_records
-                st.session_state["alias_learning_original_records"] = result.receipt_records
                 st.session_state["merchant_address_hints"] = result.merchant_address_hints
                 st.session_state.pop("merchant_candidate_cache", None)
                 st.session_state["export_file_bytes"] = None
@@ -172,10 +168,6 @@ def render_new_job_view() -> None:
     )
     card_transactions: list[CardTransaction] = st.session_state.get("card_transactions", [])
 
-    if uploaded_metadata:
-        st.subheader("저장 메타데이터")
-        st.dataframe(stored_files_to_dataframe(uploaded_metadata), use_container_width=True, hide_index=True)
-
     render_processing_summary(uploaded_metadata, receipt_records, card_transactions)
 
     st.subheader("3단계: 검수")
@@ -192,12 +184,6 @@ def render_new_job_view() -> None:
     st.subheader("4단계: 엑셀 다운로드")
     if st.button("표준 엑셀 생성", type="secondary"):
         try:
-            alias_learning_summary = learn_merchant_aliases_from_review(
-                original_records=st.session_state.get("alias_learning_original_records") or receipt_records,
-                reviewed_records=reviewed_records,
-            )
-            if int(alias_learning_summary.get("saved_count") or 0) > 0:
-                st.info("상호 후보 사전에 검수 입력값 일부를 반영했습니다.")
             export_bytes = prepare_export_bytes(reviewed_records, card_transactions)
             export_file_name = build_export_filename()
             st.session_state["export_file_bytes"] = export_bytes
@@ -279,28 +265,6 @@ def save_export_history_once(
 def reset_export_history_state(session_state: MutableMapping[str, object]) -> None:
     session_state.pop("saved_job_id", None)
     session_state.pop("saved_export_signature", None)
-
-
-def learn_merchant_aliases_from_review(
-    *,
-    original_records: Iterable[ReceiptRecord],
-    reviewed_records: Iterable[ReceiptRecord],
-    service: MerchantAliasLearningService | None = None,
-) -> dict[str, object]:
-    try:
-        learner = service or MerchantAliasLearningService(MerchantRepository(config=get_config()))
-        result = learner.learn_from_review(
-            original_records=list(original_records),
-            reviewed_records=list(reviewed_records),
-        )
-    except Exception:
-        result = MerchantAliasLearningResult(failed_count=1)
-    return {
-        "saved_count": result.saved_count,
-        "skipped_count": result.skipped_count,
-        "failed_count": result.failed_count,
-        "failed": result.failed_count > 0,
-    }
 
 
 def build_export_history_signature(
@@ -497,7 +461,7 @@ def process_receipt_files_with_mock_ocr(
             )
             continue
         parsed_record = _parse_ocr_result(parser, ocr_result, metadata)
-        validated_record = validator.validate(apply_sample_receipt_anchor(parsed_record))
+        validated_record = validator.validate(parsed_record)
         hint = _address_hint_for_ocr_result(ocr_result)
         if hint:
             merchant_address_hints[validated_record.id] = hint
@@ -650,16 +614,14 @@ def render_processing_summary(
         return
 
     summary = build_review_summary(receipt_records)
+    card_uploaded = any(Path(item.original_file_name).suffix.lower() in {".csv", ".xlsx"} for item in uploaded_metadata)
     columns = st.columns(6)
     columns[0].metric("업로드 파일 수", f"{len(uploaded_metadata):,}")
     columns[1].metric("영수증 처리 건수", f"{len(receipt_records):,}")
-    columns[2].metric("카드 사용내역 건수", f"{len(card_transactions):,}")
+    columns[2].metric("카드 사용내역 건수", f"{len(card_transactions):,}" if card_uploaded else "미업로드")
     columns[3].metric("검토필요 건수", f"{summary['needs_review_count']:,}")
-    columns[4].metric("카드매칭 완료", f"{summary['card_matched_count']:,}")
-    columns[5].metric(
-        "카드 후보/미매칭",
-        f"{summary['card_candidate_count']:,}/{summary['card_unmatched_count']:,}",
-    )
+    columns[4].metric("카드매칭", f"{summary['card_matched_count']:,}" if card_uploaded else "미실행")
+    columns[5].metric("카드 후보/미매칭", f"{summary['card_candidate_count']:,}/{summary['card_unmatched_count']:,}" if card_uploaded else "미실행")
 
 
 def stored_files_to_dataframe(stored_files: list[StoredFileMetadata]) -> pd.DataFrame:

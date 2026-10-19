@@ -58,6 +58,11 @@ class CardMatcher:
 
     def _candidate_for(self, receipt: ReceiptRecord, transaction: CardTransaction) -> MatchCandidate | None:
         if receipt.approval_number and transaction.approval_number and receipt.approval_number == transaction.approval_number:
+            if receipt.total_amount is not None and transaction.total_amount is not None and receipt.total_amount != transaction.total_amount:
+                return None
+            if receipt.transaction_date is not None and transaction.transaction_date is not None:
+                if abs((receipt.transaction_date - transaction.transaction_date).days) > 1:
+                    return None
             return MatchCandidate(
                 transaction=transaction,
                 score=1.0,

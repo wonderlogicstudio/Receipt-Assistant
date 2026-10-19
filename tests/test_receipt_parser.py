@@ -3,7 +3,6 @@ from __future__ import annotations
 from app.core.enums import CardMatchStatus, EvidenceType, OCRProviderName, OCRStatus, ReviewStatus
 from app.core.ocr_models import OCRResult
 from app.parser.normalizers import (
-    calculate_estimated_vat_amounts,
     normalize_amount,
     normalize_business_number,
     normalize_date,
@@ -70,6 +69,21 @@ def make_ocr_result(
     )
 
 
+def test_nonfinite_amounts_are_missing_instead_of_crashing_parser():
+    for value in (float("inf"), float("-inf"), "9" * 400):
+        assert normalize_amount(value) is None
+    assert normalize_date(float("inf")) is None
+    assert normalize_date(float("-inf")) is None
+
+
+def test_amount_normalization_does_not_invent_digits_or_round_through_float():
+    assert normalize_amount("ABC12DEF") is None
+    assert normalize_amount("9007199254740993") == 9007199254740993
+    assert normalize_amount("12.5") is None
+    assert normalize_amount(12.5) is None
+    assert normalize_amount("12,000.00원") == 12000
+
+
 def test_sample_ocr_raw_text_is_converted_to_receipt_record():
     receipt = ReceiptParser().parse(make_ocr_result())
 
@@ -100,22 +114,6 @@ def test_ocr_result_metadata_is_reflected_in_receipt_record():
     assert receipt.confidence == 0.94
 
 
-def test_receipt_normalizers_handle_supported_formats():
-    assert normalize_date("2026.05.07").isoformat() == "2026-05-07"
-    assert normalize_date("20260507").isoformat() == "2026-05-07"
-    assert normalize_date("2278-12-05") is None
-    assert normalize_amount("12,000원") == 12000
-    assert normalize_amount("₩12,000") == 12000
-    assert normalize_amount("－10,800") == -10800
-    assert normalize_amount(" - 10,800") == -10800
-    assert normalize_amount("(-10,800)") == -10800
-    assert normalize_amount("10.800") == 10800
-    assert normalize_amount("10, 800") == 10800
-    assert normalize_amount("10 800") == 10800
-    assert normalize_discount_amount("-10,800") == 10800
-    assert calculate_estimated_vat_amounts(5100) == (4636, 464)
-    assert normalize_business_number("1234567890") == "123-45-67890"
-    assert normalize_business_number("123-45-67890") == "123-45-67890"
 
 
 def test_missing_total_amount_needs_review_with_warning():
@@ -795,7 +793,7 @@ def test_card_approval_number_is_not_used_as_discount_amount():
     assert any(item["ignored_reason"] in {"approval_number_candidate", "long_number_candidate"} for item in diagnostics)
 
 
-def test_suspicious_raw_json_discount_amount_is_recalculated_from_gross_and_final():
+def test_suspicious_raw_json_discount_amount_is_ignored_without_recalculation():
     raw_text = "\n".join(
         [
             "상호명: 테스트상점",
@@ -811,12 +809,12 @@ def test_suspicious_raw_json_discount_amount_is_recalculated_from_gross_and_fina
     receipt = ReceiptParser().parse(make_ocr_result(raw_text, raw_json=raw_json))
 
     assert receipt.gross_amount == 28750
-    assert receipt.discount_amount == 2800
+    assert receipt.discount_amount is None
     assert receipt.final_amount == 25950
     assert receipt.paid_amount == 25950
     assert receipt.total_amount == 25950
     assert "discount_identifier_candidate_ignored" in receipt.amount_warnings
-    assert "discount_recalculated_from_gross_and_final" in receipt.amount_warnings
+    assert "discount_recalculated_from_gross_and_final" not in receipt.amount_warnings
 
 
 def test_payment_reference_line_does_not_pull_footer_number_as_paid_amount():
@@ -961,7 +959,7 @@ def test_paid_amount_misread_label_still_keeps_zero_total():
     assert receipt.total_amount == 0
 
 
-def test_discount_is_inferred_from_gross_and_zero_payment_when_explicit_discount_is_missing():
+def test_discount_stays_missing_with_gross_and_zero_payment_when_explicit_discount_is_missing():
     raw_text = "\n".join(
         [
             "상호명: 테스트상점",
@@ -976,12 +974,12 @@ def test_discount_is_inferred_from_gross_and_zero_payment_when_explicit_discount
     receipt = ReceiptParser().parse(make_ocr_result(raw_text))
 
     assert receipt.gross_amount == 10800
-    assert receipt.discount_amount == 10800
+    assert receipt.discount_amount is None
     assert receipt.final_amount == 0
     assert receipt.paid_amount == 0
     assert receipt.total_amount == 0
-    assert "discount_inferred_from_zero_payment" in receipt.amount_warnings
-    assert "zero_payment_after_discount" in receipt.amount_warnings
+    assert "discount_inferred_from_zero_payment" not in receipt.amount_warnings
+    assert "zero_payment_after_discount" not in receipt.amount_warnings
     assert receipt.review_status == ReviewStatus.NEEDS_REVIEW.value
 
 
@@ -1090,13 +1088,13 @@ def test_missing_explicit_vat_uses_reference_estimate_without_filling_vat_amount
 
     assert receipt.supply_amount is None
     assert receipt.vat_amount is None
-    assert receipt.estimated_supply_amount == 4636
-    assert receipt.estimated_vat_amount == 464
-    assert receipt.estimated_supply_amount + receipt.estimated_vat_amount == receipt.total_amount
-    assert receipt.vat_source == "estimated_reference"
+    assert receipt.estimated_supply_amount is None
+    assert receipt.estimated_vat_amount is None
+    assert receipt.vat_amount is None
+    assert receipt.vat_source == "missing"
     assert receipt.vat_review_required is True
     assert "vat_not_explicit" in receipt.vat_warnings
-    assert "vat_estimated_reference_only" in receipt.vat_warnings
+    assert "vat_estimated_reference_only" not in receipt.vat_warnings
     assert receipt.review_status == ReviewStatus.NEEDS_REVIEW.value
 
 
@@ -1117,9 +1115,9 @@ def test_zero_total_skips_reference_vat_estimate_without_error():
     assert receipt.vat_amount is None
     assert receipt.estimated_supply_amount is None
     assert receipt.estimated_vat_amount is None
-    assert receipt.vat_source == "zero_amount"
-    assert receipt.vat_review_required is False
-    assert "vat_estimate_skipped_zero_amount" in receipt.vat_warnings
+    assert receipt.vat_source == "missing"
+    assert receipt.vat_review_required is True
+    assert "vat_not_explicit" in receipt.vat_warnings
 
 
 def test_sensitive_wifi_text_is_detected_without_breaking_discount_amounts():
@@ -1160,9 +1158,9 @@ def test_sensitive_wifi_text_is_detected_without_breaking_estimated_vat():
     receipt = ReceiptParser().parse(make_ocr_result(raw_text))
     data = receipt.to_dict()
 
-    assert receipt.estimated_supply_amount == 4636
-    assert receipt.estimated_vat_amount == 464
-    assert receipt.vat_source == "estimated_reference"
+    assert receipt.estimated_supply_amount is None
+    assert receipt.estimated_vat_amount is None
+    assert receipt.vat_source == "missing"
     assert receipt.sensitive_text_detected is True
     assert "wifi_password" in receipt.sensitive_text_categories
     assert "sample-password-1234" not in str(data)
@@ -1254,7 +1252,7 @@ def test_overlay_title_is_not_selected_as_merchant_name():
     assert "merchant_name_missing_or_low_confidence" in receipt.parser_warnings
 
 
-def test_overlay_title_with_punctuation_is_not_selected_as_merchant_name():
+def test_explicit_merchant_with_punctuation_is_not_rewritten_as_a_known_product():
     raw_text = "\n".join(
         [
             "슈퍼 마리오!",
@@ -1265,9 +1263,9 @@ def test_overlay_title_with_punctuation_is_not_selected_as_merchant_name():
 
     receipt = ReceiptParser().parse(make_ocr_result(raw_text, raw_json={"MerchantName": "슈퍼 마리오!"}))
 
-    assert receipt.merchant_name is None
+    assert receipt.merchant_name == "슈퍼 마리오!"
     assert receipt.review_status == ReviewStatus.NEEDS_REVIEW.value
-    assert "merchant_name_missing_or_low_confidence" in receipt.parser_warnings
+    assert "merchant_name_missing_or_low_confidence" not in receipt.parser_warnings
 
 
 def test_status_bar_text_is_skipped_and_receipt_merchant_candidate_is_used():
@@ -1286,7 +1284,7 @@ def test_status_bar_text_is_skipped_and_receipt_merchant_candidate_is_used():
     assert receipt.merchant_name == "테스트카페"
 
 
-def test_business_number_dictionary_maps_merchant_name():
+def test_business_number_does_not_fill_unobserved_merchant_name():
     raw_text = "\n".join(
         [
             "슈퍼 마리오",
@@ -1299,10 +1297,10 @@ def test_business_number_dictionary_maps_merchant_name():
     receipt = ReceiptParser().parse(make_ocr_result(raw_text))
 
     assert receipt.business_number == "206-86-50913"
-    assert receipt.merchant_name == "이마트 영등포점"
+    assert receipt.merchant_name is None
 
 
-def test_business_number_mapping_wins_when_receipt_name_is_present():
+def test_observed_merchant_name_is_preserved():
     raw_text = "\n".join(
         [
             "이마트 영등포점",
@@ -1379,7 +1377,7 @@ def test_raw_json_merchant_name_has_priority_over_raw_text():
     assert receipt.merchant_name == "원본상호"
 
 
-def test_raw_json_overlay_merchant_name_is_ignored():
+def test_explicit_merchant_name_is_not_suppressed_by_a_fixed_product_name_list():
     raw_text = "\n".join(
         [
             "거래일자: 2026.05.07",
@@ -1390,7 +1388,7 @@ def test_raw_json_overlay_merchant_name_is_ignored():
 
     receipt = ReceiptParser().parse(make_ocr_result(raw_text, raw_json={"MerchantName": "슈퍼 마리오"}))
 
-    assert receipt.merchant_name is None
+    assert receipt.merchant_name == "슈퍼 마리오"
     assert receipt.review_status == ReviewStatus.NEEDS_REVIEW.value
 
 

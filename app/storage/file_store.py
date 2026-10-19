@@ -7,7 +7,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from app.core.config import AppConfig, get_config
-from app.core.exceptions import InvalidSessionIdError, UnsupportedFileTypeError, UploadFileTooLargeError
+from app.core.exceptions import FileStoreError, InvalidSessionIdError, UnsupportedFileTypeError, UploadFileTooLargeError
 
 
 SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]+$")
@@ -42,6 +42,7 @@ class FileStore:
     def save_uploaded_file(self, uploaded_file, session_id: str | None = None) -> StoredFileMetadata:
         safe_session_id = self.get_or_create_session_id(session_id)
         original_file_name = str(getattr(uploaded_file, "name", "uploaded_file")).strip() or "uploaded_file"
+        original_file_name = Path(original_file_name.replace("\\", "/")).name
         safe_file_name = sanitize_filename(original_file_name)
         file_extension = Path(safe_file_name).suffix.lower()
 
@@ -72,12 +73,18 @@ class FileStore:
 
     def resolve_stored_path(self, metadata: StoredFileMetadata) -> Path:
         self._validate_session_id(metadata.session_id)
-        return self._session_dir(metadata.session_id) / metadata.stored_file_name
+        session_dir = self._session_dir(metadata.session_id).resolve()
+        target = (session_dir / metadata.stored_file_name).resolve()
+        if not target.is_relative_to(session_dir):
+            raise FileStoreError("저장 파일이 업로드 폴더 밖을 가리킬 수 없습니다.")
+        return target
 
     def _session_dir(self, session_id: str) -> Path:
         root = self.config.upload_root
         target = root / session_id
         self._validate_session_id(session_id)
+        if not target.resolve().is_relative_to(root.resolve()):
+            raise FileStoreError("저장 폴더가 업로드 폴더 밖을 가리킬 수 없습니다.")
         return target
 
     def _validate_session_id(self, session_id: str) -> None:

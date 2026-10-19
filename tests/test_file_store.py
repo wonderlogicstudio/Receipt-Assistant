@@ -9,7 +9,8 @@ from uuid import uuid4
 import pytest
 
 from app.core.config import AppConfig
-from app.core.exceptions import InvalidSessionIdError, UnsupportedFileTypeError, UploadFileTooLargeError
+from app.core.exceptions import FileStoreError, InvalidSessionIdError, UnsupportedFileTypeError, UploadFileTooLargeError
+from dataclasses import replace
 from app.storage.file_store import FileStore, sanitize_filename
 
 
@@ -102,13 +103,26 @@ def test_same_original_file_name_does_not_overwrite_existing_file(tmp_path):
     assert store.resolve_stored_path(second).read_bytes() == b"second"
 
 
+def test_stored_file_resolution_cannot_leave_upload_root(tmp_path):
+    store = make_store(tmp_path)
+    metadata = store.save_uploaded_file(FakeUploadedFile("receipt.jpg"), "session-a")
+    for stored_name in ("../../private.jpg", "../session-b/private.jpg", str((tmp_path / "private.jpg").resolve())):
+        with pytest.raises(FileStoreError):
+            store.resolve_stored_path(replace(metadata, stored_file_name=stored_name))
+
+
+def test_original_filename_metadata_does_not_retain_client_directory(tmp_path):
+    metadata = make_store(tmp_path).save_uploaded_file(FakeUploadedFile(r"C:\private\receipt.jpg"), "session-a")
+    assert metadata.original_file_name == "receipt.jpg"
+
+
 def test_saved_metadata_contains_required_fields_and_relative_path(tmp_path):
     store = make_store(tmp_path)
 
     metadata = store.save_uploaded_file(FakeUploadedFile(r"C:\private\receipt.pdf", b"data"), session_id="session-a")
     metadata_dict = metadata.to_dict()
 
-    assert metadata_dict["original_file_name"] == r"C:\private\receipt.pdf"
+    assert metadata_dict["original_file_name"] == "receipt.pdf"
     assert metadata_dict["stored_file_name"].endswith(".pdf")
     assert metadata_dict["stored_relative_path"].startswith("data/uploads/session-a/")
     assert metadata_dict["file_size_bytes"] == 4

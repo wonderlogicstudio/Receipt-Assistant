@@ -113,6 +113,13 @@ def test_different_amount_is_not_matched():
     assert matched.card_match_reason == "no_candidate"
 
 
+def test_approval_number_cannot_override_conflicting_amount_or_date():
+    receipt = replace(make_receipt(), approval_number="001234")
+    for transaction in (make_transaction(total_amount=99000), make_transaction(transaction_date=date(2025, 5, 7))):
+        result = CardMatcher().match([receipt], [transaction])[0]
+        assert result.card_match_status != CardMatchStatus.MATCHED.value
+
+
 def test_no_candidate_sets_unmatched_warning():
     receipt = make_receipt()
 

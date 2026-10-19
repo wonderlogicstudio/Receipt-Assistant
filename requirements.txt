@@ -1,4 +1,6 @@
 streamlit
+# Streamlit 1.60 media responses require the pre-1.8 response ordering.
+starlette==1.7.0
 pandas
 openpyxl
 pydantic

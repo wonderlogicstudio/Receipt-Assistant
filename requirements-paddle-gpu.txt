@@ -1,0 +1,7 @@
+# Optional Windows / Python 3.11 runtime. Keep default requirements OCR-free.
+-r requirements.txt
+numpy==1.26.4
+paddleocr==2.7.3
+paddlepaddle-gpu==2.6.2
+# Paddle 2.6.2 requires protobuf <=3.20.2; this Streamlit version is compatible.
+streamlit==1.60.0

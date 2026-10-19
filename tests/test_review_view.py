@@ -9,7 +9,7 @@ import pytest
 from app.core.config import AppConfig
 from app.core.enums import CardMatchStatus, EvidenceType, ReviewStatus
 from app.core.receipt_models import ReceiptRecord
-from app.ui.review_view import _SessionCachedMerchantMatcher, _preview_image_payload, _selected_review_dataframe
+from app.ui.review_view import _SessionCachedMerchantMatcher, _preview_image_payload, build_receipt_overview, _select_overview_row
 from app.ui.settings_view import MERCHANT_CSV_MAX_UPLOAD_SIZE_BYTES, import_merchant_dictionary_uploaded_files
 from app.ui.review_utils import (
     PREVIEW_KIND_BLOCKED,
@@ -178,18 +178,6 @@ def test_session_cached_merchant_matcher_reuses_same_lookup() -> None:
     assert "candidate_lookup_elapsed_ms" in metrics
 
 
-def test_selected_review_dataframe_returns_only_selected_row() -> None:
-    dataframe = pd.DataFrame(
-        [
-            {"__receipt_id": "r1", "file": "first.jpg"},
-            {"__receipt_id": "r2", "file": "second.jpg"},
-        ]
-    )
-
-    selected = _selected_review_dataframe(dataframe, "r2")
-
-    assert len(selected) == 1
-    assert selected.iloc[0]["file"] == "second.jpg"
 
 
 def test_preview_image_payload_does_not_fallback_to_full_path(tmp_path: Path) -> None:
@@ -201,3 +189,49 @@ def test_preview_image_payload_does_not_fallback_to_full_path(tmp_path: Path) ->
 
     assert payload == ""
     assert str(tmp_path) not in str(payload)
+
+
+def test_batch_overview_keeps_ten_receipts_with_numeric_amounts_and_no_internal_columns():
+    from dataclasses import replace
+    records = [replace(make_receipt(stored_relative_path=None), total_amount=1000 * i) for i in range(10)]
+    records[0] = replace(records[0], supply_amount=0, vat_amount=None, duplicate_group_id="synthetic-duplicate")
+    dataframe = build_receipt_overview(records)
+    assert len(dataframe) == 10
+    assert dataframe.iloc[0]["최종결제금액"] == 0
+    assert dataframe.iloc[0]["공급가액"] == 0 and pd.isna(dataframe.iloc[0]["부가세"])
+    assert dataframe.iloc[0]["중복의심"] == "Y"
+    assert dataframe.iloc[-1]["최종결제금액"] == 9000
+    assert set(dataframe.columns) == {"사용일자", "상호", "사업자번호", "할인금액", "공급가액", "부가세", "최종결제금액", "결제수단", "중복의심", "검수상태"}
+
+
+def test_overview_selection_maps_original_position_to_receipt_identity(monkeypatch):
+    from app.ui import review_view
+    state = {"receipt_overview": {"selection": {"rows": [1]}}}
+    monkeypatch.setattr(review_view.st, "session_state", state)
+    _select_overview_row(["first", "second", "third"], "receipt_overview")
+    assert state["review_selected_receipt_id"] == "second"
+    assert state["receipt_review_dialog_id"] == "second"
+    assert state["receipt_review_dialog_ids"] == ["first", "second", "third"]
+    assert state["receipt_review_dialog_open"]
+
+
+def test_first_row_opens_dialog_and_empty_or_stale_selection_does_not(monkeypatch):
+    from app.ui import review_view
+    for rows in ([], [-1], [3]):
+        state = {"receipt_overview": {"selection": {"rows": rows}}}
+        monkeypatch.setattr(review_view.st, "session_state", state)
+        _select_overview_row(["first", "second"], "receipt_overview")
+        assert not state.get("receipt_review_dialog_open")
+    state = {"receipt_overview": {"selection": {"rows": [0]}}}
+    monkeypatch.setattr(review_view.st, "session_state", state)
+    _select_overview_row(["first", "second"], "receipt_overview")
+    assert state["receipt_review_dialog_id"] == "first"
+
+
+def test_clicking_any_cell_opens_its_original_row(monkeypatch):
+    from app.ui import review_view
+    state = {"receipt_overview": {"selection": {"rows": [], "cells": [(2, "최종결제금액")]}}}
+    monkeypatch.setattr(review_view.st, "session_state", state)
+    _select_overview_row(["first", "second", "third"], "receipt_overview")
+    assert state["receipt_review_dialog_id"] == "third"
+    assert state["receipt_review_dialog_open"]

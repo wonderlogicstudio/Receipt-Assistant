@@ -215,7 +215,7 @@ def test_parse_azure_like_standard_context_core_fields() -> None:
     assert receipt.final_amount == 20000
     assert receipt.paid_amount == 20000
     assert receipt.vat_amount is None
-    assert receipt.estimated_vat_amount == 1818
+    assert receipt.estimated_vat_amount is None
     assert receipt.vat_review_required is True
     assert "vat_review_hint" in receipt.vat_warnings
     assert receipt.sensitive_text_detected is True
@@ -268,7 +268,6 @@ def test_azure_like_standard_context_matches_legacy_core_fields() -> None:
             "total_amount",
             "gross_amount",
             "discount_amount",
-            "final_amount",
             "paid_amount",
             "supply_amount",
             "vat_amount",
@@ -278,7 +277,9 @@ def test_azure_like_standard_context_matches_legacy_core_fields() -> None:
             "vat_review_required",
         ],
     )
-    assert warning_sets(standard)["vat_warnings"] >= {"vat_not_explicit", "vat_estimated_reference_only"}
+    assert standard.final_amount == 20000  # Explicit standard candidate.
+    assert legacy.final_amount is None  # No longer computed from gross minus discount.
+    assert warning_sets(standard)["vat_warnings"] >= {"vat_not_explicit"}
     assert standard.review_status == ReviewStatus.NEEDS_REVIEW.value
     assert legacy.review_status == ReviewStatus.NEEDS_REVIEW.value
 
@@ -295,7 +296,7 @@ def test_edge_case_standard_context_matches_legacy_safe_fields() -> None:
     assert standard.ocr_provider == "mock"
     assert legacy.ocr_provider == "manual"
     assert standard.final_amount == 5000
-    assert legacy.final_amount == 0
+    assert legacy.final_amount is None
     assert standard.review_status == ReviewStatus.NEEDS_REVIEW.value
     assert legacy.review_status == ReviewStatus.NEEDS_REVIEW.value
     assert "final_paid_amount_mismatch" in standard.amount_warnings

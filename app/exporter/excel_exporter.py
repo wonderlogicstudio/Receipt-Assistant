@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from io import BytesIO
 from pathlib import Path
+import re
 from typing import Iterable, Sequence
 
 from openpyxl import Workbook
@@ -461,8 +462,8 @@ class ExcelExporter:
             self._join_unique(receipt.amount_warnings),
             receipt.supply_amount,
             receipt.vat_amount,
-            receipt.estimated_supply_amount,
-            receipt.estimated_vat_amount,
+            None,  # Keep legacy columns empty; never publish reverse-calculated tax.
+            None,
             receipt.vat_source,
             self._join_unique([*receipt.vat_warnings, receipt.vat_note] if receipt.vat_note else receipt.vat_warnings),
             "Y" if receipt.sensitive_text_detected else "",
@@ -619,7 +620,9 @@ def _extension(file_name: str | None) -> str:
 
 
 def _looks_like_path(value: str) -> bool:
-    return ":\\" in value or ":/" in value or "\\" in value or "/" in value
+    return (":\\" in value or ":/" in value or "\\" in value
+            or value.startswith(("/", "./", "../", "~/", "data/", "output/"))
+            or re.search(r"\s/[^/\s]+/", value) is not None)
 
 
 def _unique(values: list[str]) -> list[str]:

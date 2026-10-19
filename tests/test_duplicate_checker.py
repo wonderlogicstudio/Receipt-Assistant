@@ -49,6 +49,22 @@ def test_same_date_amount_and_merchant_are_marked_duplicate():
     assert checked[0].duplicate_group_id == checked[1].duplicate_group_id
 
 
+def test_three_duplicates_share_one_group():
+    records = DuplicateChecker().check([make_receipt(), make_receipt(), make_receipt()])
+    assert len({record.duplicate_group_id for record in records}) == 1
+
+
+def test_bridge_between_duplicate_pairs_merges_their_groups():
+    records = [make_receipt(merchant_name=name) for name in ("a", "b", "c", "d")]
+
+    class ConnectedChecker(DuplicateChecker):
+        def _is_duplicate_candidate(self, first, second):
+            return (first.merchant_name, second.merchant_name) in {("a", "b"), ("c", "d"), ("b", "d")}
+
+    checked = ConnectedChecker().check(records)
+    assert len({record.duplicate_group_id for record in checked}) == 1
+
+
 def test_similar_merchant_name_is_marked_duplicate():
     records = [make_receipt(merchant_name="테스트카페 강남점"), make_receipt(merchant_name="테스트카페강남점")]
 

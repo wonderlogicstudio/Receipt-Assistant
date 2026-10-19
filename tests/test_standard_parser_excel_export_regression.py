@@ -51,8 +51,8 @@ def test_standard_parser_vat_reference_columns_do_not_replace_explicit_vat() -> 
     assert summary.cell(row=2, column=columns["부가세"]).value is None
     assert summary.cell(row=2, column=columns["추정공급가액"]).value == receipt.estimated_supply_amount
     assert summary.cell(row=2, column=columns["추정부가세"]).value == receipt.estimated_vat_amount
-    assert summary.cell(row=2, column=columns["부가세출처"]).value == "estimated_reference"
-    assert "vat_estimated_reference_only" in summary.cell(row=2, column=columns["부가세검토사유"]).value
+    assert summary.cell(row=2, column=columns["부가세출처"]).value == "missing"
+    assert "vat_not_explicit" in summary.cell(row=2, column=columns["부가세검토사유"]).value
 
 
 def test_standard_parser_sensitive_categories_are_exported_without_sensitive_values() -> None:

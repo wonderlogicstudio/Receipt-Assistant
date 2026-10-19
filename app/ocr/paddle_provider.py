@@ -6,13 +6,14 @@ from hashlib import sha256
 import importlib
 import importlib.util
 import re
+from statistics import median
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from time import perf_counter
 from typing import Any, Callable, Mapping
 
-from app.classifier.merchant_dictionary import find_merchant_by_business_number, find_merchant_by_name_fragment
 from app.core.standard_ocr import StandardOCRResult
+from app.core.receipt_evidence import is_receipt_instruction
 from app.ocr.adapters.paddle_standard_adapter import PaddleStandardOCRAdapter
 from app.ocr.base import OCRInput, OCRProvider
 from app.security.sensitive_filter import detect_sensitive_text, redact_sensitive_text
@@ -278,7 +279,13 @@ class PaddleOCRProvider(OCRProvider):
                     use_textline_orientation=self.use_angle_cls,
                 )
                 if rotated_result is not None and _quality_score(rotated_result) > _quality_score(sanitized_result):
-                    sanitized_result = rotated_result
+                    if sanitized_result.get("lines"):
+                        sanitized_result = _merge_missing_candidate_hints(
+                            sanitized_result, rotated_result,
+                            allowed_types={kind for kind, _ in _candidate_signature(rotated_result)},
+                        )
+                    else:
+                        sanitized_result = rotated_result
                     fallback_warning = "paddle_image_rotation_fallback"
             except Exception:
                 sanitized_result.setdefault("warnings", [])
@@ -322,6 +329,44 @@ class PaddleOCRProvider(OCRProvider):
             except Exception:
                 sanitized_result.setdefault("warnings", [])
                 sanitized_result["warnings"].append("paddle_detail_crop_candidate_fallback_skipped")
+        if 'merchant_name' not in {kind for kind, _ in _candidate_signature(sanitized_result)}:
+            try:
+                header = self._header_identity_result(ocr, path, sanitized_result)
+                if header is not None:
+                    sanitized_result = _merge_missing_candidate_hints(sanitized_result, header, allowed_types={'merchant_name'})
+                    sanitized_result.setdefault('warnings', []).append('paddle_header_identity_reread')
+            except Exception:
+                sanitized_result.setdefault('warnings', []).append('paddle_header_identity_reread_skipped')
+        tax_types = {"supply_amount", "vat_amount"}
+        candidate_types = {kind for kind, _ in _candidate_signature(sanitized_result)}
+        if (_can_try_supplemental_fallback(fallback_warning)
+                and "total_amount" in candidate_types and not tax_types.issubset(candidate_types)):
+            try:
+                detail_result = self._tiled_image_result(ocr, path, use_textline_orientation=self.use_angle_cls)
+                merged = _merge_missing_candidate_hints(sanitized_result, detail_result, allowed_types=tax_types)
+                if _candidate_signature(merged) != _candidate_signature(sanitized_result):
+                    sanitized_result = merged
+                    supplemental_warnings.append("paddle_tiled_tax_candidate_fallback")
+            except Exception:
+                sanitized_result.setdefault("warnings", []).append("paddle_tiled_tax_fallback_skipped")
+        if (_can_try_supplemental_fallback(fallback_warning)
+                and "total_amount" in candidate_types and "transaction_date" not in candidate_types):
+            try:
+                detail_result = self._tiled_image_result(
+                    ocr, path, use_textline_orientation=self.use_angle_cls, band_height=500,
+                )
+                merged = _merge_missing_candidate_hints(
+                    sanitized_result, detail_result, allowed_types={"transaction_date"},
+                )
+                if _candidate_signature(merged) != _candidate_signature(sanitized_result):
+                    sanitized_result = merged
+                    supplemental_warnings.append("paddle_tiled_date_candidate_fallback")
+            except Exception:
+                sanitized_result.setdefault("warnings", []).append("paddle_tiled_date_fallback_skipped")
+        try:
+            sanitized_result = self._read_missing_numeric_rows(ocr, path, sanitized_result)
+        except Exception:
+            sanitized_result.setdefault("warnings", []).append("paddle_numeric_row_fallback_skipped")
         ocr_elapsed_ms = _elapsed_ms(ocr_started_at)
         if fallback_warning:
             sanitized_result.setdefault("warnings", [])
@@ -341,6 +386,7 @@ class PaddleOCRProvider(OCRProvider):
                 diagnostic_code=_string_or_completed(sanitized_result.get("diagnostic_code")),
             ),
         )
+        sanitized_result['engine_version'] = getattr(ocr, 'engine_version', sanitized_result.get('engine_version', 'optional'))
         return self.adapter.convert(
             sanitized_result,
             source_file_id=str(source_info["source_file_id"]),
@@ -387,6 +433,7 @@ class PaddleOCRProvider(OCRProvider):
                 use_angle_cls=use_textline_orientation,
                 use_gpu=self.use_gpu,
                 show_log=self.show_log,
+                det_limit_side_len=1920,
             )
         except TypeError:
             ocr = factory(**self._modern_factory_kwargs(use_textline_orientation=use_textline_orientation))
@@ -394,6 +441,17 @@ class PaddleOCRProvider(OCRProvider):
         return ocr
 
     def _run_ocr(self, ocr: Any, path: Path, *, use_textline_orientation: bool) -> Any:
+        from PIL import Image
+
+        try:
+            with Image.open(path) as image:
+                needs_transpose = image.getexif().get(274, 1) in range(2, 9)
+        except OSError:
+            needs_transpose = False
+        if needs_transpose:
+            return self._run_ocr_with_normalized_image(
+                ocr, path, use_textline_orientation=use_textline_orientation,
+            )
         if hasattr(ocr, "ocr"):
             try:
                 return ocr.ocr(str(path), cls=use_textline_orientation)
@@ -476,6 +534,7 @@ class PaddleOCRProvider(OCRProvider):
                         use_textline_orientation=use_textline_orientation,
                     )
                     sanitized = self._sanitize_result(raw_result)
+                    sanitized = _restore_image_coordinates(sanitized, normalized.size, angle)
                     score = _quality_score(sanitized)
                     if score > best_score:
                         best_score = score
@@ -508,6 +567,7 @@ class PaddleOCRProvider(OCRProvider):
                         use_textline_orientation=use_textline_orientation,
                     )
                     sanitized = self._sanitize_result(raw_result)
+                    sanitized = _restore_image_coordinates(sanitized, normalized.size, angle)
                     score = _quality_score(sanitized)
                     if score > best_score:
                         best_score = score
@@ -554,11 +614,243 @@ class PaddleOCRProvider(OCRProvider):
                             use_textline_orientation=use_textline_orientation,
                         )
                         sanitized = self._sanitize_result(raw_result)
+                        sanitized = _restore_image_coordinates(sanitized, normalized.size, angle,
+                                                               origin=box[:2], scale=3)
                         score = _quality_score(sanitized)
                         if score > best_score:
                             best_score = score
                             best_result = sanitized
         return best_result
+
+    def _tiled_image_result(
+        self, ocr: Any, path: Path, *, use_textline_orientation: bool, band_height: int = 1000,
+    ) -> dict[str, Any]:
+        from PIL import Image, ImageOps
+
+        with Image.open(path) as image:
+            upright = ImageOps.exif_transpose(image).convert("RGB")
+        # Avoid shrinking a long receipt as a whole; overlap protects rows at crop boundaries.
+        step = max(band_height, (upright.height + 7) // 8)
+        collected: list[tuple[Any, str, float | None]] = []
+        with TemporaryDirectory() as folder:
+            target = Path(folder) / "paddle_band.png"
+            for top in range(0, upright.height, step):
+                offset = max(0, top - 100)
+                upright.crop((0, offset, upright.width, min(upright.height, top + step + 100))).save(target)
+                raw = self._run_ocr(ocr, target, use_textline_orientation=use_textline_orientation)
+                items: list[tuple[Any, str, float | None]] = []
+                _collect_paddle_line_items(raw, items)
+                for bbox, text, confidence in items:
+                    if not _looks_like_bbox(bbox) or len(bbox) != 4 or not isinstance(bbox[0], (list, tuple)):
+                        continue
+                    shifted = [[x, y + offset] for x, y in bbox]
+                    center = sum(y for _, y in shifted) / 4
+                    if top <= center < top + step:
+                        collected.append((shifted, text, confidence))
+        collected.sort(key=lambda item: (sum(y for _, y in item[0]) / 4, min(x for x, _ in item[0])))
+        return self._sanitize_result([[box, (text, confidence)] for box, text, confidence in collected])
+
+    def _header_identity_result(self, ocr, path, payload):
+        from PIL import Image, ImageOps
+        import numpy as np
+
+        lines = list(payload.get('lines', []))
+        anchors = {str(block_id) for candidate in payload.get('key_value_candidates', [])
+                   if candidate.get('candidate_type') == 'business_number'
+                   for block_id in candidate.get('source_block_ids', [])}
+        index = next((i for i, line in enumerate(lines) if str(line.get('block_id')) in anchors), None)
+        if index is None:
+            return None
+        boxes = [line['bbox'] for line in lines[max(0,index-8):index+1]
+                 if _looks_like_bbox(line.get('bbox')) and isinstance(line['bbox'][0], (list,tuple))]
+        if len(boxes) < 2:
+            return None
+        margin = median(max(p[1] for p in box)-min(p[1] for p in box) for box in boxes)*.3
+        with Image.open(path) as source:
+            image = ImageOps.exif_transpose(source).convert('RGB')
+            left = max(0,int(min(p[0] for box in boxes for p in box)-margin))
+            top = max(0,int(min(p[1] for box in boxes for p in box)-margin))
+            right = min(image.width,int(max(p[0] for box in boxes for p in box)+margin))
+            bottom = min(image.height,int(max(p[1] for box in boxes for p in box)+margin))
+            raw = ocr.ocr(np.array(image.crop((left,top,right,bottom))),cls=False)
+        result = self._sanitize_result(raw)
+        source_lines = {str(line['block_id']): line for line in result.get('lines', [])}
+        result['key_value_candidates'] = [candidate for candidate in result.get('key_value_candidates', [])
+            if candidate.get('candidate_type') != 'merchant_name'
+            or not (len(_compact_line(candidate.get('value') or '')) <= 3
+                    and _compact_line(candidate.get('value') or '').endswith('점')
+                    and not any(_labeled_merchant_value(_safe_line_text(source_lines.get(str(block_id), {})) or '')
+                                for block_id in candidate.get('source_block_ids', [])))]
+        for line in result.get('lines', []):
+            if _looks_like_bbox(line.get('bbox')):
+                line['bbox'] = [[x+left,y+top] for x,y in line['bbox']]
+        return result
+
+    def _read_missing_numeric_rows(self, ocr, path, payload):
+        from PIL import Image, ImageOps
+
+        candidates = list(payload.get("key_value_candidates", []))
+        seen = {candidate.get("candidate_type") for candidate in candidates}
+        labels = {"supply_amount": r"공급가액|공급가|(?:부가세)?과세물품가액|과세매출",
+                  "vat_amount": r"부가세(?:vat)?|부가세액|부가가치세|vat",
+                  "discount_amount": r"할인합계|할인금액|할인"}
+        lines = list(payload.get("lines", []))
+        attempts = 0
+        readings = {}
+        with Image.open(path) as image:
+            upright = ImageOps.exif_transpose(image).convert("RGB")
+            for line in payload.get("lines", []):
+                if attempts >= 6:
+                    break
+                text = _safe_line_text(line) or ""
+                label = re.sub(r"[\[\]()：:*]", "", _compact_line(text))
+                kind = next((kind for kind, pattern in labels.items() if kind not in seen
+                             and re.fullmatch(rf"(?:{pattern})", label)), None)
+                if kind is None:
+                    continue
+                attempts += 1
+                observed = []
+                for crop, bbox in _numeric_row_crops(upright, line):
+                    raw = ocr.ocr(crop, det=False, cls=False)
+                    for item in raw or []:
+                        for value, confidence in item or []:
+                            if confidence >= .97 and re.fullmatch(r"\d+(?:[ ,.]\d{3})*", value):
+                                amount = int(re.sub(r"\D", "", value))
+                                if amount <= 10_000_000:
+                                    observed.append((amount, float(confidence), bbox))
+                if len({amount for amount, _, _ in observed}) != 1:
+                    continue
+                readings.setdefault(kind, []).append((str(line["block_id"]), *observed[0]))
+        for kind, observations in readings.items():
+            if len({amount for _, amount, _, _ in observations}) != 1:
+                payload.setdefault("warnings", []).append(f"numeric_row_conflict:{kind}")
+                continue
+            source_ids = []
+            for label_id, amount, confidence, bbox in observations:
+                block_id = f"numeric-row-{len(lines)}"
+                lines.append(dict(block_id=block_id, text=str(amount), normalized_text=str(amount),
+                                  confidence=confidence, bbox=bbox, page_index=0, line_order=len(lines)))
+                source_ids.extend([label_id, block_id])
+            candidates.append(dict(key=kind, candidate_type=kind, value=str(amount), normalized_value=str(amount),
+                                   confidence=min(row[2] for row in observations), source_block_ids=source_ids))
+        if len(candidates) != len(payload.get("key_value_candidates", [])):
+            payload = {**payload, "lines": lines, "key_value_candidates": candidates,
+                       "warnings": [*payload.get("warnings", []), "paddle_numeric_row_candidate_fallback"]}
+        payload = self._reread_fragmented_total_rows(ocr, path, payload)
+        return self._reread_weak_total_row(ocr, path, payload)
+
+    def _reread_weak_total_row(self, ocr, path, payload):
+        from PIL import Image, ImageOps
+        import numpy as np
+
+        lines = list(payload.get('lines', []))
+        sources = {str(line.get('block_id')): line for line in lines}
+        candidates = list(payload.get('key_value_candidates', []))
+        totals = {'total_amount', 'final_amount'}
+        if any(_total_anchor_priority(candidate, sources) >= 100
+               for candidate in candidates if candidate.get('candidate_type') in totals):
+            return payload
+        labels = [line for line in lines if re.fullmatch(
+            r'(?:총합계|합계금액|총금액|최종결제금액|실결제금액|결제금액|영수금액)[:：]*',
+            _compact_line(_safe_line_text(line) or ''))]
+        observed = []
+        with Image.open(path) as source:
+            image = ImageOps.exif_transpose(source).convert('RGB')
+            for line in labels[:2]:
+                for crop, bbox in _numeric_row_crops(image, line, join_groups=True):
+                    readings = []
+                    for margin in (3, 7):
+                        padded = np.pad(crop, ((margin, margin), (margin, margin), (0, 0)), constant_values=255)
+                        for row in ocr.ocr(padded, det=False, cls=False) or []:
+                            for value, confidence in row or []:
+                                if confidence >= .97 and re.fullmatch(r'[₩￦]?\s*\d+(?:[ ,.]\d{3})*(?:\s*원)?', value):
+                                    amount = int(re.sub(r'\D', '', value))
+                                    if amount <= 10_000_000:
+                                        readings.append((amount, float(confidence)))
+                    if len(readings) == 2 and readings[0][0] == readings[1][0]:
+                        observed.append((readings[0][0], min(item[1] for item in readings), bbox, line['block_id']))
+        if not observed or len({item[0] for item in observed}) != 1:
+            return payload
+        amount, confidence, bbox, label_id = observed[0]
+        block_id = f'explicit-total-{len(lines)}'
+        lines.append(dict(block_id=block_id, text=str(amount), normalized_text=str(amount),
+                          confidence=confidence, bbox=bbox, page_index=0, line_order=len(lines)))
+        candidates = [candidate for candidate in candidates if candidate.get('candidate_type') not in totals]
+        for kind in totals:
+            candidates.append(dict(key=kind, candidate_type=kind, value=str(amount), normalized_value=str(amount),
+                                   confidence=confidence, source_block_ids=[str(label_id), block_id]))
+        return {**payload, 'lines': lines, 'key_value_candidates': candidates,
+                'warnings': [*payload.get('warnings', []), 'paddle_explicit_total_reread']}
+
+    def _reread_fragmented_total_rows(self, ocr, path, payload):
+        from PIL import Image, ImageOps
+        import numpy as np
+
+        lines = list(payload.get("lines", []))
+        candidates = list(payload.get("key_value_candidates", []))
+        recovered = False
+        attempts = 0
+        for row in _same_row_text_lines(lines):
+            parts = row.get("source_lines", [])
+            if not parts or _compact_line(_safe_line_text(parts[0]) or "").rstrip(":：") not in {
+                "총합계", "합계금액", "총금액", "총액", "합계", "최종결제금액", "실결제금액",
+            }:
+                continue
+            numeric = [part for part in parts[1:]
+                       if re.fullmatch(r"\d+(?:[,.;]\d+)*", _safe_line_text(part) or "")]
+            if len(numeric) < 2 or len(numeric) != len(parts) - 1:
+                continue
+            if _has_separate_numeric_columns(parts):
+                continue
+            groups = re.split(r"[,.;\s]+", " ".join(_safe_line_text(part) or "" for part in numeric))
+            if len(groups[0]) <= 3 and all(len(group) == 3 for group in groups[1:]):
+                continue
+            if attempts >= 2:
+                break
+            attempts += 1
+            boxes = [part["bbox"] for part in numeric]
+            slope = median((box[1][1]-box[0][1]) / (box[1][0]-box[0][0]) for box in boxes
+                           if box[1][0] > box[0][0])
+            height = max(box[3][1]-box[0][1] for box in boxes)
+            left = min(point[0] for box in boxes for point in box) - height * .15
+            right = max(point[0] for box in boxes for point in box) + height * .15
+            top = min(point[1]-slope*point[0] for box in boxes for point in box[:2]) - height * .15
+            bottom = max(point[1]-slope*point[0] for box in boxes for point in box[2:]) + height * .15
+            corners = [[left, top+slope*left], [right, top+slope*right],
+                       [right, bottom+slope*right], [left, bottom+slope*left]]
+            with Image.open(path) as source:
+                image = ImageOps.exif_transpose(source).convert("RGB")
+                quad = tuple(value for index in (0, 3, 2, 1) for value in corners[index])
+                crop = image.transform((max(1, int(right-left)), max(1, int(bottom-top))),
+                                       Image.Transform.QUAD, quad, Image.Resampling.BICUBIC)
+            readings = []
+            for item in ocr.ocr(np.array(crop), det=False, cls=False) or []:
+                for value, confidence in item or []:
+                    if confidence >= .97 and re.fullmatch(r"\d+(?:[ ,.]\d{3})*", value):
+                        amount = int(re.sub(r"\D", "", value))
+                        if amount <= 10_000_000:
+                            readings.append((amount, float(confidence)))
+            if len({amount for amount, _ in readings}) != 1:
+                continue
+            amount = readings[0][0]
+            source_ids = {str(part.get("block_id")) for part in parts}
+            kinds = {"total_amount", "final_amount"}
+            candidates = [candidate for candidate in candidates
+                          if candidate.get("candidate_type") not in kinds
+                          or not source_ids.intersection(candidate.get("source_block_ids", []))]
+            block_id = f"total-row-{len(lines)}"
+            lines.append(dict(block_id=block_id, text=str(amount), bbox=corners,
+                              confidence=min(confidence for _, confidence in readings),
+                              page_index=row.get("page_index", 0), line_order=len(lines)))
+            for kind in ("total_amount", "final_amount"):
+                candidates.append(dict(key=kind, candidate_type=kind, value=str(amount), normalized_value=str(amount),
+                                       confidence=min(confidence for _, confidence in readings),
+                                       source_block_ids=[str(parts[0].get("block_id")), block_id]))
+            recovered = True
+        if not recovered:
+            return payload
+        return {**payload, "lines": lines, "key_value_candidates": candidates,
+                "warnings": [*payload.get("warnings", []), "paddle_fragmented_total_reread"]}
 
     def _modern_factory_kwargs(self, *, use_textline_orientation: bool) -> dict[str, Any]:
         return {
@@ -819,6 +1111,12 @@ def _clear_paddle_ocr_cache_for_tests() -> None:
 def _load_paddle_ocr_class() -> Any:
     try:
         from paddleocr import PaddleOCR
+        from importlib.metadata import version
+
+        if version('paddleocr').split('.')[0] == '3':
+            from app.ocr.paddle_v5_engine import PaddleV5Engine
+
+            return PaddleV5Engine
     except ImportError as exc:
         raise PaddleOCRUnavailable("paddle_not_installed") from exc
     except Exception as exc:
@@ -848,16 +1146,9 @@ def _should_try_orientation_fallback(payload: Mapping[str, Any]) -> bool:
         for candidate in candidate_items
         if isinstance(candidate, Mapping)
     }
-    reliable_types = {
-        "merchant_name",
-        "transaction_date",
-        "business_number",
-        "total_amount",
-        "final_amount",
-        "paid_amount",
-        "payment_method",
-    }
-    return not bool(candidate_types & reliable_types)
+    has_identity = bool(candidate_types & {"merchant_name", "business_number"})
+    has_amount = bool(candidate_types & {"total_amount", "final_amount", "paid_amount"})
+    return not (has_identity and has_amount)
 
 
 def _should_try_supplemental_image_fallback(payload: Mapping[str, Any]) -> bool:
@@ -906,19 +1197,53 @@ def _merge_missing_candidate_hints(
         for candidate in merged_candidates
         if isinstance(candidate, Mapping)
     }
+    extra_lines = supplemental.get("lines")
+    primary_lines = primary.get("lines")
+    supplemental_lines = {str(line.get("block_id")): line for line in (extra_lines if isinstance(extra_lines, list) else [])
+                          if isinstance(line, Mapping)}
+    merged_lines = list(primary_lines) if isinstance(primary_lines, list) else []
+    source_ids: dict[str, str] = {}
     for candidate in supplemental_candidates if isinstance(supplemental_candidates, list) else []:
         if not isinstance(candidate, Mapping):
             continue
         candidate_type = str(candidate.get("candidate_type") or candidate.get("key") or "")
-        if candidate_type not in allowed_types or candidate_type in existing_types:
+        if candidate_type not in allowed_types:
             continue
         value = str(candidate.get("normalized_value") or candidate.get("value") or "").strip()
         if not value or value == "[REDACTED]":
             continue
-        merged_candidates.append(dict(candidate))
+        if candidate_type in existing_types:
+            if candidate_type not in {'total_amount', 'final_amount'}:
+                continue
+            if not re.fullmatch(r'-?\d+(?:[ ,.]+\d{3})*', value):
+                continue
+            primary_sources = {str(line.get('block_id')): line for line in merged_lines}
+            existing = [item for item in merged_candidates if item.get('candidate_type') == candidate_type]
+            if _total_anchor_priority(candidate, supplemental_lines) <= max(
+                    (_total_anchor_priority(item, primary_sources) for item in existing), default=0):
+                continue
+            merged_candidates = [item for item in merged_candidates if item.get('candidate_type') != candidate_type]
+        copied = dict(candidate)
+        copied_ids = []
+        for block_id in candidate.get("source_block_ids", []):
+            if block_id in supplemental_lines:
+                if block_id not in source_ids:
+                    source_ids[block_id] = f"supplemental-{len(merged_lines)}-{block_id}"
+                    merged_lines.append({**supplemental_lines[block_id], "block_id": source_ids[block_id],
+                                         "line_order": len(merged_lines)})
+                copied_ids.append(source_ids[block_id])
+        copied["source_block_ids"] = copied_ids
+        merged_candidates.append(copied)
         existing_types.add(candidate_type)
     merged["key_value_candidates"] = merged_candidates
+    if source_ids:
+        merged["lines"] = merged_lines
     return merged
+
+
+def _total_anchor_priority(candidate, sources) -> int:
+    return max((_strong_total_label_priority(_compact_line(_safe_line_text(sources.get(str(block_id), {})) or ''))
+                for block_id in candidate.get('source_block_ids', [])), default=0)
 
 
 def _quality_score(payload: Mapping[str, Any]) -> int:
@@ -956,27 +1281,126 @@ def _quality_score(payload: Mapping[str, Any]) -> int:
     )
 
 
+def _restore_image_coordinates(payload, size, angle, *, origin=(0, 0), scale=1):
+    width, height = size
+    restored = []
+    for line in payload.get('lines', []):
+        box = line.get('bbox')
+        if not _looks_like_bbox(box) or len(box) != 4 or not isinstance(box[0], (list, tuple)):
+            restored.append(line)
+            continue
+        points = []
+        for x, y in box:
+            x, y = x/scale+origin[0], y/scale+origin[1]
+            points.append({0: (x, y), 90: (width-y, x),
+                           180: (width-x, height-y), 270: (y, height-x)}[angle])
+        turns = angle//90
+        if turns:
+            points = points[-turns:] + points[:-turns]
+        restored.append({**line, 'bbox': [list(point) for point in points]})
+    return {**payload, 'lines': restored}
+
+
+def _numeric_row_crops(image, line, *, join_groups=False):
+    import cv2
+    import numpy as np
+
+    box = np.asarray(line.get("bbox"), dtype=float)
+    if box.shape != (4, 2):
+        return []
+    width = box[1, 0] - box[0, 0]
+    height = (box[3, 1] - box[0, 1] + box[2, 1] - box[1, 1]) / 2
+    if width <= 0 or height <= 0 or height > width * .7:
+        return []
+    slope = (box[1, 1] - box[0, 1]) / width
+    left, right = box[1, 0] + height * .15, image.width - 1
+    if right - left < height:
+        return []
+    top, bottom = box[1, 1] - height * .12, box[2, 1] + height * .12
+    points = np.float32([[left, top], [right, top + slope * (right-left)],
+                         [right, bottom + slope * (right-left)], [left, bottom]])
+    w, h = int(right-left), int(bottom-top)
+    transform = cv2.getPerspectiveTransform(points, np.float32([[0,0], [w,0], [w,h], [0,h]]))
+    warped = cv2.warpPerspective(np.array(image), transform, (w,h), borderValue=(255,255,255))
+    gray = cv2.cvtColor(warped, cv2.COLOR_RGB2GRAY)
+    mask = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 51, 12)
+    _, _, stats, _ = cv2.connectedComponentsWithStats(mask)
+    boxes = [(int(x),int(y),int(bw),int(bh)) for x,y,bw,bh,area in stats[1:]
+             if height*.25 < bh < height*1.2 and bw < height*3 and area > height*height*.015]
+    groups = []
+    for box in sorted(boxes):
+        if not groups or box[0] - max(b[0]+b[2] for b in groups[-1]) > height*.55:
+            groups.append([])
+        groups[-1].append(box)
+    if join_groups and groups:
+        groups = [[box for group in groups for box in group]]
+    result = []
+    inverse = np.linalg.inv(transform)
+    for group in groups[-4:]:
+        x,y = min(b[0] for b in group), min(b[1] for b in group)
+        r,bottom = max(b[0]+b[2] for b in group), max(b[1]+b[3] for b in group)
+        x,y,r,bottom = max(0,x-5), max(0,y-5), min(w,r+5), min(h,bottom+5)
+        corners = cv2.perspectiveTransform(np.float32([[[x,y],[r,y],[r,bottom],[x,bottom]]]), inverse)[0]
+        result.append((warped[y:bottom,x:r].copy(), corners.tolist()))
+    return result
+
+
 def _lines_from_paddle_output(raw_result: Any) -> list[dict[str, Any]]:
     line_items: list[tuple[Any, str, float | None]] = []
     _collect_paddle_line_items(raw_result, line_items)
     lines: list[dict[str, Any]] = []
-    for index, (bbox, text, confidence) in enumerate(line_items[:120]):
+    for index, (bbox, text, confidence) in enumerate(line_items[:2048]):
+        context = " ".join(item[1] for item in line_items[max(index - 1, 0):index + 1])
+        if any(label in _compact_line(context) for label in ("승인시간", "승인일시", "거래일시", "매출일시")):
+            def format_timestamp(match: re.Match) -> str:
+                try:
+                    return datetime.strptime(match.group(0), "%Y%m%d%H%M%S").strftime("%Y-%m-%d %H:%M:%S")
+                except ValueError:
+                    return match.group(0)
+            if not re.search(r"카드번호|card(?:number|no|#)", _compact_line(context)):
+                text = re.sub(r"(?<!\d)20\d{12}(?!\d)", format_timestamp, text)
         safe_text = redact_sensitive_text(text)
         detection = detect_sensitive_text(text)
         lines.append(
             {
                 "block_id": f"paddle-p0-l{index}",
                 "page_index": 0,
-                "line_order": index,
+                "line_order": len(lines),
                 "text": "[REDACTED]" if detection.detected and safe_text == "[REDACTED]" else safe_text,
-                "normalized_text": "[REDACTED]" if detection.detected and safe_text == "[REDACTED]" else safe_text,
+                "normalized_text": "[REDACTED]" if detection.detected and safe_text == "[REDACTED]" else _strip_receipt_heading(safe_text),
                 "confidence": confidence,
                 "bbox": bbox,
                 "block_type": "line",
                 "sensitive_category": detection.categories[0] if detection.categories else None,
             }
         )
+        if detection.detected:
+            # Keep the redacted source marker; expose only explicit safe identity fields.
+            for part_index, fragment in enumerate(_safe_identity_fragments(safe_text)):
+                lines.append({**lines[-1], 'block_id': f'paddle-p0-l{index}-identity-{part_index}',
+                              'text': fragment, 'normalized_text': fragment, 'line_order': len(lines),
+                              'sensitive_category': None, 'block_type': 'identity_fragment'})
     return lines
+
+
+def _strip_receipt_heading(text: str) -> str:
+    title = r'(?:(?:카드\s*판매|카드\s*매출)\s*)?영\s*수\s*증'
+    value = re.sub(rf'^\s*[\[<〈《(]\s*{title}\s*[\]>〉》)]\s*', '', text)
+    return re.sub(rf'^\s*{title}(?:\s+|$)', '', value).strip()
+
+
+def _safe_identity_fragments(safe_text: str) -> list[str]:
+    fragments = []
+    for segment in safe_text.split('[REDACTED]'):
+        if re.search(r'사업\s*자|사업\s*자\s*등록', segment):
+            match = BUSINESS_NUMBER_CANDIDATE_PATTERN.search(segment)
+            if match:
+                fragments.append('사업자번호: '+match.group(0))
+        name_text = re.split(r'\s+(?:e-?mail|mail|이메일|메일)\s*[:：]', segment, maxsplit=1, flags=re.I)[0]
+        name = _labeled_merchant_value(name_text)
+        if name:
+            fragments.append('상호명: '+name)
+    return [value for value in dict.fromkeys(fragments) if not detect_sensitive_text(value).detected]
 
 
 def _collect_paddle_line_items(
@@ -993,7 +1417,9 @@ def _collect_paddle_line_items(
         rec_texts = value.get("rec_texts")
         if isinstance(rec_texts, (list, tuple)):
             rec_scores = value.get("rec_scores")
-            dt_polys = value.get("dt_polys")
+            dt_polys = value.get("rec_polys")
+            if dt_polys is None:
+                dt_polys = value.get("dt_polys")
             for index, text in enumerate(rec_texts):
                 if text in {None, ""}:
                     continue
@@ -1066,7 +1492,7 @@ def _average_confidence(lines: list[Mapping[str, Any]]) -> float | None:
 DATE_CANDIDATE_PATTERN = re.compile(
     r"\b(?:\d{4}[-./]\d{1,2}[-./]\d{1,2}|\d{2}[-./]\d{1,2}[-./]\d{1,2}|\d{8})(?:\s+\d{1,2}:\d{2}(?::\d{2})?)?\b"
 )
-BUSINESS_NUMBER_CANDIDATE_PATTERN = re.compile(r"\b\d{3}[-\s]?\d{2}[-\s]?\d{5}\b")
+BUSINESS_NUMBER_CANDIDATE_PATTERN = re.compile(r"(?<!\d)\d\s*\d\s*\d\s*[-−–]*\s*\d\s*\d\s*[-−–]*\s*\d\s*\d\s*\d\s*\d\s*\d(?!\d)")
 AMOUNT_CANDIDATE_PATTERN = re.compile(
     r"[\-－−–—]?\s*(?:₩\s*)?(?:(?:[0-9OoIl|BSㅇ]{1,3}(?:(?:\s*[,\.]\s*|\s+)[0-9OoIl|BSㅇ]{3})+)|[0-9OoIl|BSㅇ]+)(?:원)?",
     flags=re.IGNORECASE,
@@ -1078,7 +1504,7 @@ TOTAL_LABELS = ("합계", "총액", "총금액", "결제", "받은", "청구", "
 FINAL_LABELS = ("합계", "총액", "총금액", "최종", "결제", "받은", "청구", "total")
 PAID_LABELS = ("결제", "받은", "카드", "현금", "승인금액", "paid")
 PAID_AMOUNT_LABELS = ("결제", "받은", "청구", "승인금액", "paid")
-SUPPLY_LABELS = ("공급", "공급가", "공급가액", "과세물품가액", "물품가액", "물품가", "supply")
+SUPPLY_LABELS = ("공급", "공급가", "공급가액", "과세금액", "과세물품가액", "물품가액", "물품가", "supply")
 VAT_LABELS = ("부가", "세액", "vat", "tax")
 DISCOUNT_LABELS = ("할인", "쿠폰", "차감", "discount")
 GROSS_LABELS = ("상품금액", "매출", "공급대가", "gross")
@@ -1119,6 +1545,31 @@ SIMPLE_TOTAL_AMOUNT_LABELS = (
     "\uc2b9\uc778\uae08\uc561",
     "\uc774\uc6a9\uae08\uc561",
 )
+STRONG_TOTAL_AMOUNT_LABELS = (
+    "\ucd1d\ud569\uacc4",
+    "\ud569\uacc4\uae08\uc561",
+    "\ud569\uacc4",
+    "\ucd1d\uae08\uc561",
+    "\uce74\ub4dc\uacb0\uc81c",
+    "\uc2e0\uc6a9\uce74\ub4dc",
+    "\uc2b9\uc778\uae08\uc561",
+    "\uc2b5\uc778\uae08\uc561",
+    "\uacb0\uc81c\uae08\uc561",
+    "\uc2e4\uacb0\uc81c\uae08\uc561",
+    "\uccad\uad6c\uae08\uc561",
+    "\ubc1b\uc74c\uae08\uc561",
+    "\uc601\uc218\uae08\uc561",
+    "\ub9e4\ucd9c\uae08\uc561",
+    "\ud310\ub9e4\uae08\uc561",
+    "\ub9e4\ucd9c\uc561",
+    "\ud310\ub9e4\uc561",
+)
+STRONG_TOTAL_AMOUNT_LOW_PRIORITY_LABELS = (
+    "\ub9e4\ucd9c\uae08\uc561",
+    "\ud310\ub9e4\uae08\uc561",
+    "\ub9e4\ucd9c\uc561",
+    "\ud310\ub9e4\uc561",
+)
 APP_SCREEN_MARKERS = (
     "\uce74\ud14c\uace0\ub9ac",
     "\ubbf8\uc9c0\uc815",
@@ -1146,23 +1597,6 @@ APP_SCREEN_MERCHANT_BLOCKERS = (
     "\uc624\uc804",
     "\uc624\ud6c4",
 )
-TOP_MERCHANT_SUFFIX_MARKERS = (
-    "주유소",
-    "식당",
-    "카페",
-    "커피",
-    "김밥",
-    "마트",
-    "약국",
-    "서점",
-    "상회",
-    "상사",
-    "식품",
-    "호텔",
-    "리조트",
-    "\uace0\uae43\uc9d1",
-    "fresh",
-)
 
 
 def build_paddle_candidate_hints_from_safe_lines(lines: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -1171,18 +1605,25 @@ def build_paddle_candidate_hints_from_safe_lines(lines: list[Mapping[str, Any]])
 
 
 def _candidate_hints_from_lines(lines: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    positioned_lines = lines
+    lines = _same_row_text_lines(lines)
+    lines = [line for line in lines if not is_receipt_instruction(_safe_line_text(line) or "")
+             and "면세물품가액" not in _compact_line(_safe_line_text(line) or "")]
+    lines = _split_inline_tax_fields(lines)
     candidates: list[dict[str, Any]] = []
     seen_types: set[str] = set()
 
+    _append_explicit_row_candidates(candidates, seen_types, lines)
+    _append_tax_column_candidates(candidates, seen_types, positioned_lines)
     _append_columnar_tax_summary_candidates(candidates, seen_types, lines)
-    _append_compact_tax_amount_candidates(candidates, seen_types, lines)
     _append_top_tax_total_sequence_candidates(candidates, seen_types, lines)
     _append_labeled_tax_sum_sequence_candidates(candidates, seen_types, lines)
     _append_gas_split_tax_total_candidates(candidates, seen_types, lines)
     _append_card_receipt_zero_group_amount_candidates(candidates, seen_types, lines)
-    _append_card_receipt_split_tax_summary_candidates(candidates, seen_types, lines)
     _append_split_total_label_amount_candidates(candidates, seen_types, lines)
     _append_card_sales_total_adjacent_amount_candidate(candidates, seen_types, lines)
+    _append_strong_labeled_total_amount_candidates(candidates, seen_types, lines)
+    _append_split_amount_label_won_total_candidates(candidates, seen_types, lines)
 
     for index, line in enumerate(lines):
         text = _safe_line_text(line)
@@ -1212,7 +1653,7 @@ def _candidate_hints_from_lines(lines: list[Mapping[str, Any]]) -> list[dict[str
                 confidence=confidence,
             )
 
-        business_text = (
+        business_text = text if BUSINESS_NUMBER_CANDIDATE_PATTERN.search(text) else (
             _reverse_labeled_business_number_fragment(lines, index)
             or _labeled_business_number_prefix_fragment(lines, index)
             or _joined_business_number_fragment(lines, index)
@@ -1235,6 +1676,12 @@ def _candidate_hints_from_lines(lines: list[Mapping[str, Any]]) -> list[dict[str
             )
 
         compact = _compact_line(text)
+        if compact.rstrip(':：') == '금액' and any(
+                re.search(r'상품명|단가|수량', _compact_line(_safe_line_text(previous) or ''))
+                for previous in lines[max(0, index-3):index]):
+            continue
+        if re.match(r"^(?:받은금액|받은돈|거스름돈|잔돈)", compact):
+            continue
         amount_label_compact = _compact_line_with_next(lines, index)
         labeled_merchant_name = _labeled_merchant_value(text) or _next_labeled_merchant_value(lines, index)
         merchant_name = labeled_merchant_name
@@ -1300,9 +1747,14 @@ def _candidate_hints_from_lines(lines: list[Mapping[str, Any]]) -> list[dict[str
             continue
         amount = _last_reasonable_amount(text, allow_zero=_has_zero_safe_amount_label(compact))
         suppress_nearby_amount = False
+        if (amount is None and line.get("bbox")
+                and (_has_any_label(compact, SUPPLY_LABELS) or _has_any_label(compact, VAT_LABELS))):
+            continue  # Positioned tax rows cannot borrow the following payment row.
         if amount is None and _has_zero_safe_amount_label(amount_label_compact):
             if _has_any_label(amount_label_compact, SUPPLY_LABELS):
-                amount = _previous_tax_amount_if_balanced(lines, index)
+                amount = _nearby_two_fragment_amount(lines, index, max_lines=2)
+                if amount is None:
+                    amount = _previous_tax_amount_if_balanced(lines, index)
                 if amount is None:
                     amount = _nearby_split_amount_fragments(lines, index, max_lines=4)
             elif _has_any_label(amount_label_compact, VAT_LABELS) and _is_split_vat_label(compact, amount_label_compact):
@@ -1365,15 +1817,405 @@ def _candidate_hints_from_lines(lines: list[Mapping[str, Any]]) -> list[dict[str
             _append_amount_candidate(candidates, seen_types, "final_amount", amount, source_block_id, confidence)
             _append_amount_candidate(candidates, seen_types, "total_amount", amount, source_block_id, confidence)
 
-    _append_top_known_merchant_candidate(candidates, seen_types, lines)
-    _append_multiline_known_merchant_candidate(candidates, seen_types, lines)
+    _append_header_or_branch_merchant_candidate(candidates, seen_types, lines)
     _append_top_card_slip_amount_candidates(candidates, seen_types, lines)
     _append_repeated_card_slip_amount_candidates(candidates, seen_types, lines)
     _append_sum_checked_total_amount_candidates(candidates, seen_types, lines)
-    _append_card_receipt_won_amount_candidates(candidates, seen_types, lines)
     _append_card_receipt_tax_adjacent_amount_candidates(candidates, seen_types, lines)
     _normalize_contextual_merchant_candidates(candidates, lines)
     return candidates
+
+
+def _append_explicit_row_candidates(candidates, seen_types, lines) -> None:
+    # Same-row labels outrank numeric sequences and individual card slips.
+    patterns = (
+        ("total_amount", 110, r"합계금액|총합계|총금액|최종결제금액|실결제금액|결제금액|영수금액|받을금액"),
+        ("total_amount", 105, r"합계|총액"),
+        ("total_amount", 90, r"subtotal|stotal"),
+        ("supply_amount", 100, r"(?:부가세)?과세물품가액|과세매출|과세금액|공급가액|공급가|공급금액"),
+        ("vat_amount", 100, r"(?:상품가격에포함된)?부가세액|(?:상품가격에포함된)?부가세(?:vat)?|vat|부가가치세"),
+        ("discount_amount", 100, r"할인합계|할인금액|할인액|할인"),
+    )
+    options: dict[str, list[tuple[int, dict[str, Any]]]] = {}
+    for index, line in enumerate(lines):
+        text = re.sub(r"[\[\]()〈〉<>*]", "", _compact_line(_safe_line_text(line) or ""))
+        merchant = _labeled_merchant_value(_safe_line_text(line) or "")
+        if merchant:
+            candidate = dict(key="merchant_name", candidate_type="merchant_name", value=merchant,
+                             normalized_value=merchant, confidence=_optional_float(line.get("confidence")),
+                             source_block_ids=[str(part.get("block_id")) for part in line.get("source_lines", [line])])
+            options.setdefault("merchant_name", []).append((100, candidate))
+        for kind, priority, label in patterns:
+            if _has_separate_numeric_columns(line.get('source_lines', [])):
+                continue
+            confidence = _optional_float(line.get("confidence"))
+            if confidence is not None and confidence < .75:
+                continue
+            match = re.fullmatch(rf"(?:{label})[:：]*[₩￦#]?([0-9]+(?:[,.;:][0-9]{{3}})*)(?:원)?", text)
+            if not match:
+                continue
+            amount = int(re.sub(r"\D", "", match.group(1)))
+            if amount > 10_000_000:
+                continue
+            candidate = dict(key=kind, candidate_type=kind, value=str(amount), normalized_value=str(amount),
+                             confidence=_optional_float(line.get("confidence")),
+                             source_block_ids=[str(part.get("block_id")) for part in line.get("source_lines", [line])])
+            options.setdefault(kind, []).append((priority, candidate))
+    for kind, ranked in options.items():
+        best = max(priority for priority, _ in ranked)
+        selected = [candidate for priority, candidate in ranked if priority == best]
+        candidates.extend(selected)
+        seen_types.add(kind)
+        if kind == "total_amount":
+            candidates.extend({**candidate, "key": "final_amount", "candidate_type": "final_amount"} for candidate in selected)
+            seen_types.add("final_amount")
+
+
+def _append_tax_column_candidates(candidates, seen_types, lines):
+    positioned = []
+    labels = {"과세물품가액": "supply_amount", "공급가액": "supply_amount",
+              "부가세vat": "vat_amount", "부가세": "vat_amount", "부가세액": "vat_amount",
+              "부가가치세": "vat_amount", "vat": "vat_amount", "합계금액": "total_amount"}
+    for line in lines:
+        box = line.get("bbox")
+        if not isinstance(box, (list, tuple)) or len(box) != 4 or not all(isinstance(point, (list, tuple)) and len(point)==2 for point in box):
+            continue
+        xs, ys = zip(*box)
+        positioned.append((min(xs), min(ys), max(xs), max(ys), line))
+    for left, top, right, bottom, label_line in positioned:
+        label = re.sub(r"[\[\]()：:*]", "", _compact_line(_safe_line_text(label_line) or ""))
+        kind = labels.get(label)
+        if kind is None or kind in seen_types:
+            continue
+        height = bottom-top
+        center = (left+right)/2
+        if not any(abs(other_top-top)<height*.7 and (other_left>right or other_right<left)
+                   and int(other.get("page_index") or 0)==int(label_line.get("page_index") or 0)
+                   and re.sub(r"[\[\]()：:*]", "", _compact_line(_safe_line_text(other) or "")) in labels
+                   for other_left, other_top, other_right, _, other in positioned):
+            continue
+        options = []
+        for x1, y1, x2, y2, value_line in positioned:
+            if int(value_line.get("page_index") or 0) != int(label_line.get("page_index") or 0):
+                continue
+            if not (top+height*.5 <= y1 <= bottom+height*2 and abs((x1+x2)/2-center) <= (right-left)*.6):
+                continue
+            match = re.fullmatch(r"[₩￦#]?(\d+(?:[, .]\d{3})*)(?:원)?", _safe_line_text(value_line) or "")
+            confidence = _optional_float(value_line.get("confidence"))
+            if match and (confidence is None or confidence >= .75):
+                options.append((y1, int(re.sub(r"\D", "", match.group(1))), value_line))
+        if not options:
+            continue
+        y = min(option[0] for option in options)
+        nearest = sorted((option for option in options if abs(option[0]-y)<height*.8),
+                         key=lambda option: min(point[0] for point in option[2]['bbox']))
+        if any(max(point[0] for point in first[2]['bbox']) > min(point[0] for point in second[2]['bbox'])
+               for first, second in zip(nearest, nearest[1:])):
+            continue
+        joined = " ".join(re.sub(r"[₩￦#원]", "", _safe_line_text(option[2]) or "") for option in nearest)
+        if not re.fullmatch(r"\d+(?:[, .]\d{3})*", joined):
+            continue
+        amount = int(re.sub(r"\D", "", joined))
+        if amount > 10_000_000:
+            continue
+        for candidate_type in ([kind, "final_amount"] if kind=="total_amount" else [kind]):
+            candidates.append(dict(key=candidate_type, candidate_type=candidate_type, value=str(amount), normalized_value=str(amount),
+                                   confidence=min((_optional_float(option[2].get("confidence")) or 0 for option in nearest)),
+                                   source_block_ids=[str(label_line.get("block_id")), *[str(option[2].get("block_id")) for option in nearest]]))
+            seen_types.add(candidate_type)
+
+
+def _split_inline_tax_fields(lines: list[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    # A following label bounds a value; the row's last number belongs to neither label by default.
+    labels = sorted(set(SUPPLY_LABELS + VAT_LABELS + ("부가세액", "부가세")), key=len, reverse=True)
+    pattern = re.compile("|".join(re.escape(label) for label in labels))
+    result = []
+    for line in lines:
+        text = _compact_line(_safe_line_text(line) or "")
+        matches = list(pattern.finditer(text))
+        if len(matches) < 2:
+            result.append(line)
+            continue
+        for index, match in enumerate(matches):
+            start = match.start() if index else 0
+            end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+            segment = text[start:end]
+            result.append({**line, "text": segment, "normalized_text": segment})
+    return result
+
+
+def _has_separate_numeric_columns(parts) -> bool:
+    numeric = [part for part in parts if re.fullmatch(r'\d+(?:[,.;:]\d{3})*', _safe_line_text(part) or '')]
+    for left, right in zip(numeric, numeric[1:]):
+        if not re.search(r'[,.;:]', _safe_line_text(right) or ''):
+            continue
+        left_box, right_box = left.get('bbox'), right.get('bbox')
+        if not left_box or not right_box:
+            continue
+        height = max(point[1] for point in right_box)-min(point[1] for point in right_box)
+        gap = min(point[0] for point in right_box)-max(point[0] for point in left_box)
+        if gap > height * .75:
+            return True
+    return False
+
+
+def _same_row_text_lines(lines: list[Mapping[str, Any]]) -> list[Mapping[str, Any]]:
+    positioned = []
+    slopes: dict[int, list[float]] = {}
+    for line in lines:
+        bbox = line.get("bbox")
+        if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+            return lines
+        try:
+            xs, ys = zip(*bbox)
+            left, top, right, bottom = min(xs), min(ys), max(xs), max(ys)
+            center, height = (top + bottom) / 2, bottom - top
+            width = bbox[1][0] - bbox[0][0]
+            if height > max(1, right-left)*2 and re.fullmatch(r"[\d원₩.,\s]+", _safe_line_text(line) or ""):
+                continue
+            slope = (bbox[1][1] - bbox[0][1]) / width if width else 0
+        except (TypeError, ValueError):
+            return lines
+        if height <= 0:
+            return lines
+        page = int(line.get("page_index") or 0)
+        if width > height * 2:
+            slopes.setdefault(page, []).append(slope)
+        positioned.append((page, center, left, height, (left + right) / 2, line))
+    positioned = [(page, center - median(slopes.get(page, [0])) * x, left, height, line)
+                  for page, center, left, height, x, line in positioned]
+    rows = []
+    for page, center, left, height, line in sorted(positioned, key=lambda item: item[:3]):
+        if not rows or page != rows[-1][0] or abs(center - rows[-1][1]) > min(height, rows[-1][2]) * 0.5:
+            rows.append((page, center, height, []))
+        rows[-1][3].append((left, line))
+    combined = []
+    for _, _, _, row in rows:
+        parts = [line for _, line in sorted(row, key=lambda item: item[0]) if _safe_line_text(line)]
+        if not parts:
+            continue
+        text = " ".join(_safe_line_text(line) or "" for line in parts)
+        confidence = [_optional_float(line.get("confidence")) for line in parts]
+        combined.append({**parts[0], "text": text, "normalized_text": text, "source_lines": parts,
+                         "line_order": len(combined),
+                         "confidence": min((value for value in confidence if value is not None), default=None)})
+    return combined
+
+
+def _append_strong_labeled_total_amount_candidates(
+    candidates: list[dict[str, Any]],
+    seen_types: set[str],
+    lines: list[Mapping[str, Any]],
+) -> None:
+    if {"total_amount", "final_amount"} & seen_types:
+        return
+    options: list[tuple[int, int, int, bool, str, float | None]] = []
+    for index, line in enumerate(lines[:120]):
+        text = _safe_line_text(line)
+        if not text:
+            continue
+        compact = _compact_line(text)
+        priority = _strong_total_label_priority(compact)
+        if priority <= 0:
+            continue
+        if priority < 90 and _has_nearby_discount_label(lines, index):
+            continue
+        if _last_reasonable_amount(text) is None and _has_nearby_tax_label_after(lines, index):
+            continue
+        amount = _strong_total_amount_near_label(lines, index)
+        if amount is None or amount < 1_000 or amount > 10_000_000:
+            continue
+        source_block_id = str(line.get("block_id") or "")
+        confidence = _optional_float(line.get("confidence"))
+        options.append((priority, amount, -index, _strong_total_label_is_paid(compact), source_block_id, confidence))
+    if not options:
+        return
+    priority, amount, _negative_index, paid_like, source_block_id, confidence = sorted(
+        options,
+        key=lambda item: (item[0], item[1], item[2]),
+        reverse=True,
+    )[0]
+    candidate_types = ["final_amount", "total_amount"]
+    if paid_like:
+        candidate_types.insert(1, "paid_amount")
+    for candidate_type in candidate_types:
+        _append_amount_candidate(candidates, seen_types, candidate_type, amount, source_block_id, confidence)
+
+
+def _strong_total_label_priority(compact: str) -> int:
+    if not compact:
+        return 0
+    if any(label in compact for label in STRONG_TOTAL_AMOUNT_LOW_PRIORITY_LABELS):
+        return 80
+    total_priority_labels = (
+        "\ucd1d\ud569\uacc4",
+        "\ud569\uacc4\uae08\uc561",
+        "\ucd1d\uae08\uc561",
+    )
+    if any(label in compact for label in total_priority_labels):
+        return 110
+    high_priority_labels = (
+        "\uce74\ub4dc\uacb0\uc81c",
+        "\uc2e0\uc6a9\uce74\ub4dc",
+        "\uc2b9\uc778\uae08\uc561",
+        "\uc2b5\uc778\uae08\uc561",
+        "\uacb0\uc81c\uae08\uc561",
+        "\uc2e4\uacb0\uc81c\uae08\uc561",
+        "\uccad\uad6c\uae08\uc561",
+        "\ubc1b\uc74c\uae08\uc561",
+        "\uc601\uc218\uae08\uc561",
+    )
+    if any(label in compact for label in high_priority_labels):
+        return 100
+    if "\ud569\uacc4" in compact and not any(
+        label in compact
+        for label in (
+            "\uc18c\uacc4",
+            "\uc218\ub7c9",
+            "\ub2e8\uac00",
+            "\uacf5\uae09",
+            "\ubd80\uac00",
+            "\uc138\uc561",
+        )
+    ):
+        return 105
+    return 0
+
+
+def _strong_total_label_is_paid(compact: str) -> bool:
+    paid_labels = (
+        "\uce74\ub4dc\uacb0\uc81c",
+        "\uc2e0\uc6a9\uce74\ub4dc",
+        "\uc2b9\uc778\uae08\uc561",
+        "\uc2b5\uc778\uae08\uc561",
+        "\uacb0\uc81c\uae08\uc561",
+        "\uc2e4\uacb0\uc81c\uae08\uc561",
+        "\uccad\uad6c\uae08\uc561",
+        "\ubc1b\uc74c\uae08\uc561",
+        "\uc601\uc218\uae08\uc561",
+    )
+    return any(label in compact for label in paid_labels)
+
+
+def _strong_total_amount_near_label(lines: list[Mapping[str, Any]], index: int) -> int | None:
+    amounts: list[tuple[int, int]] = []
+    for nearby_index in range(index, min(index + 6, len(lines))):
+        text = _safe_line_text(lines[nearby_index])
+        if not text:
+            continue
+        compact = _compact_line(text)
+        if nearby_index != index and _has_blocking_non_amount_label(compact):
+            break
+        if nearby_index != index and any(
+            label in compact
+            for label in (
+                "\uacf5\uae09",
+                "\ubd80\uac00",
+                "\uc138\uc561",
+                "\ud560\uc778",
+                "\uc218\ub7c9",
+                "\ub2e8\uac00",
+            )
+        ):
+            if not _has_any_label(compact, STRONG_TOTAL_AMOUNT_LABELS):
+                break
+        amount = _last_reasonable_amount(text)
+        if amount is not None and amount >= 1_000:
+            if _looks_like_pos_identifier_amount(lines, nearby_index, amount):
+                continue
+            if nearby_index == index:
+                return amount
+            amounts.append((amount, 6 - (nearby_index - index)))
+            continue
+        if nearby_index == index:
+            amount = _nearby_currency_split_amount(lines, index, max_lines=4)
+            if amount is None:
+                amount = _nearby_split_amount_fragments(lines, index, max_lines=4)
+            if amount is not None and amount >= 1_000:
+                amounts.append((amount, 6))
+    if not amounts:
+        return None
+    return sorted(amounts, key=lambda item: (item[0], item[1]), reverse=True)[0][0]
+
+
+def _has_nearby_tax_label_after(lines: list[Mapping[str, Any]], index: int) -> bool:
+    for nearby_index in range(index + 1, min(index + 5, len(lines))):
+        text = _safe_line_text(lines[nearby_index]) or ""
+        compact = _compact_line(text)
+        if any(label in compact for label in ("\uacf5\uae09", "\ubd80\uac00", "\uc138\uc561")):
+            return True
+    return False
+
+
+def _has_nearby_discount_label(lines: list[Mapping[str, Any]], index: int) -> bool:
+    for nearby_index in range(index, min(index + 8, len(lines))):
+        text = _safe_line_text(lines[nearby_index]) or ""
+        compact = _compact_line(text)
+        if _has_any_label(compact, DISCOUNT_LABELS) or "\ud560\uc778" in compact:
+            return True
+    return False
+
+
+def _append_split_amount_label_won_total_candidates(
+    candidates: list[dict[str, Any]],
+    seen_types: set[str],
+    lines: list[Mapping[str, Any]],
+) -> None:
+    if {"total_amount", "final_amount"} & seen_types:
+        return
+    if not _has_card_evidence(lines):
+        return
+    label_index: int | None = None
+    for index in range(0, min(len(lines) - 1, 60)):
+        compact = _compact_line(_safe_line_text(lines[index]) or "")
+        next_compact = _compact_line(_safe_line_text(lines[index + 1]) or "")
+        if compact == "\uae08" and next_compact == "\uc561":
+            label_index = index
+            break
+    if label_index is None:
+        return
+    amounts: list[tuple[int, str, float | None]] = []
+    for nearby_index in range(label_index + 1, min(label_index + 18, len(lines))):
+        text = _safe_line_text(lines[nearby_index]) or ""
+        compact = _compact_line(text)
+        if _has_blocking_non_amount_label(compact):
+            continue
+        if "\uc6d0" not in compact:
+            continue
+        amount = _last_reasonable_amount(text)
+        if amount is None or amount < 1_000 or amount > 300_000:
+            continue
+        if _looks_like_pos_identifier_amount(lines, nearby_index, amount):
+            continue
+        amounts.append((amount, str(lines[nearby_index].get("block_id") or ""), _optional_float(lines[nearby_index].get("confidence"))))
+    if not amounts:
+        return
+    amount, source_block_id, confidence = sorted(amounts, key=lambda item: item[0], reverse=True)[0]
+    for candidate_type in ("final_amount", "paid_amount", "total_amount"):
+        _append_amount_candidate(candidates, seen_types, candidate_type, amount, source_block_id, confidence)
+
+
+def _nearby_two_fragment_amount(lines: list[Mapping[str, Any]], index: int, *, max_lines: int) -> int | None:
+    fragments: list[str] = []
+    for nearby_index in range(index + 1, min(index + max_lines + 1, len(lines))):
+        text = _safe_line_text(lines[nearby_index])
+        if not text:
+            continue
+        compact = _compact_line(text)
+        if _has_blocking_non_amount_label(compact):
+            break
+        fragment = _amount_fragment_digits(text, allow_zero_group=True)
+        if fragment is None:
+            if fragments:
+                break
+            continue
+        fragments.append(fragment)
+        if len(fragments) == 2:
+            amount = int("".join(fragments))
+            if 1_000 <= amount <= 10_000_000:
+                return amount
+            return None
+    return None
 
 
 def _append_amount_candidate(
@@ -1384,6 +2226,8 @@ def _append_amount_candidate(
     source_block_id: str,
     confidence: float | None,
 ) -> None:
+    if confidence is not None and confidence < .75:
+        return
     _append_candidate(
         candidates,
         seen_types,
@@ -1421,53 +2265,6 @@ def _append_columnar_tax_summary_candidates(
         source_block_id = str(lines[index].get("block_id") or "")
         _append_amount_candidate(candidates, seen_types, "vat_amount", vat_amount, source_block_id, confidence)
         _append_amount_candidate(candidates, seen_types, "supply_amount", supply_amount, source_block_id, confidence)
-        _append_amount_candidate(candidates, seen_types, "final_amount", total_amount, source_block_id, confidence)
-        _append_amount_candidate(candidates, seen_types, "total_amount", total_amount, source_block_id, confidence)
-        return
-
-
-def _append_compact_tax_amount_candidates(
-    candidates: list[dict[str, Any]],
-    seen_types: set[str],
-    lines: list[Mapping[str, Any]],
-) -> None:
-    for index, line in enumerate(lines[:80]):
-        text = _safe_line_text(line)
-        if not text:
-            continue
-        compact = _compact_line(text)
-        if "매출" not in compact:
-            continue
-        fragments: list[str] = []
-        for nearby_index in range(index + 1, min(index + 5, len(lines))):
-            candidate_text = _safe_line_text(lines[nearby_index])
-            if not candidate_text:
-                continue
-            fragment = _amount_fragment_digits(candidate_text, allow_zero_group=True)
-            if fragment is None and not fragments:
-                first_fragment = re.sub(r"\D", "", candidate_text)
-                if re.fullmatch(r"[1-9]\d{0,2}", first_fragment):
-                    fragment = first_fragment
-            if fragment is None:
-                if fragments:
-                    break
-                continue
-            fragments.append(fragment)
-            if len(fragments) >= 3:
-                break
-        if len(fragments) < 3 or len(fragments[1]) != 3:
-            continue
-        supply_amount = int(f"{fragments[0]}{fragments[1]}")
-        vat_amount = int(fragments[2])
-        total_amount = supply_amount + vat_amount
-        if supply_amount < 1_000 or vat_amount < 100 or total_amount > 1_000_000:
-            continue
-        if abs(round(supply_amount / 10) - vat_amount) > 2:
-            continue
-        source_block_id = str(line.get("block_id") or "")
-        confidence = _optional_float(line.get("confidence"))
-        _append_amount_candidate(candidates, seen_types, "supply_amount", supply_amount, source_block_id, confidence)
-        _append_amount_candidate(candidates, seen_types, "vat_amount", vat_amount, source_block_id, confidence)
         _append_amount_candidate(candidates, seen_types, "final_amount", total_amount, source_block_id, confidence)
         _append_amount_candidate(candidates, seen_types, "total_amount", total_amount, source_block_id, confidence)
         return
@@ -1613,31 +2410,6 @@ def _append_gas_split_tax_total_candidates(
         if _has_card_evidence(lines):
             _append_amount_candidate(candidates, seen_types, "paid_amount", total_amount, source_block_id, confidence)
         return
-
-
-def _split_amount_before_index(
-    lines: list[Mapping[str, Any]],
-    end_index: int,
-    *,
-    min_prefix_digits: int,
-    max_prefix_digits: int,
-) -> tuple[int, int] | None:
-    for zero_index in range(end_index - 1, max(end_index - 10, -1), -1):
-        zero_text = _safe_line_text(lines[zero_index]) or ""
-        zero_fragment = _amount_fragment_digits(zero_text, allow_zero_group=True)
-        if zero_fragment is None or not re.fullmatch(r"0{2,3}", zero_fragment):
-            continue
-        for prefix_index in range(zero_index - 1, max(zero_index - 5, -1), -1):
-            prefix_text = _safe_line_text(lines[prefix_index]) or ""
-            prefix_fragment = _amount_fragment_digits(prefix_text, allow_zero_group=False)
-            if prefix_fragment is None:
-                continue
-            if not re.fullmatch(rf"[1-9]\d{{{min_prefix_digits - 1},{max_prefix_digits - 1}}}", prefix_fragment):
-                continue
-            amount = int(f"{prefix_fragment}{zero_fragment}")
-            if amount >= 100:
-                return amount, prefix_index
-    return None
 
 
 def _split_amount_options_before_index(
@@ -1792,42 +2564,6 @@ def _append_card_receipt_tax_adjacent_amount_candidates(
         return
 
 
-def _append_card_receipt_won_amount_candidates(
-    candidates: list[dict[str, Any]],
-    seen_types: set[str],
-    lines: list[Mapping[str, Any]],
-) -> None:
-    if {"total_amount", "final_amount", "paid_amount"} & seen_types:
-        return
-    if not _has_card_evidence(lines):
-        return
-    for index, line in enumerate(lines[:100]):
-        text = _safe_line_text(line) or ""
-        compact = _compact_line(text)
-        if "\uc6d0" not in compact:
-            continue
-        if ":" in text or _has_blocking_non_amount_label(compact):
-            continue
-        digits = re.sub(r"\D", "", text)
-        if not re.fullmatch(r"[1-9]\d{3,5}", digits):
-            continue
-        amount = int(digits)
-        if amount < 1_000 or amount > 300_000:
-            continue
-        preceding_text = " ".join(
-            _safe_line_text(lines[nearby_index]) or ""
-            for nearby_index in range(max(index - 10, 0), index)
-        )
-        preceding_compact = _compact_line(preceding_text).lower()
-        if not any(token in preceding_compact for token in ("신용카드", "카드", "visa", "master")):
-            continue
-        source_block_id = str(line.get("block_id") or "")
-        confidence = _optional_float(line.get("confidence"))
-        for candidate_type in ("final_amount", "paid_amount", "total_amount"):
-            _append_amount_candidate(candidates, seen_types, candidate_type, amount, source_block_id, confidence)
-        return
-
-
 def _ocr_zero_group_fragment(text: str) -> str | None:
     compact = re.sub(r"[^0-9A-Za-zㅇ공]", "", str(text or "")).upper()
     if not compact:
@@ -1838,15 +2574,15 @@ def _ocr_zero_group_fragment(text: str) -> str | None:
     return None
 
 
-def _append_top_known_merchant_candidate(
+def _append_header_or_branch_merchant_candidate(
     candidates: list[dict[str, Any]],
     seen_types: set[str],
     lines: list[Mapping[str, Any]],
 ) -> None:
     if "merchant_name" in seen_types:
         return
-    for index, line in enumerate(lines[:6]):
-        merchant_name = _top_known_merchant_value(lines, index)
+    for index, line in enumerate(lines):
+        merchant_name = _header_or_branch_merchant_value(lines, index)
         if not merchant_name:
             continue
         _append_candidate(
@@ -1861,50 +2597,6 @@ def _append_top_known_merchant_candidate(
         return
 
 
-def _append_multiline_known_merchant_candidate(
-    candidates: list[dict[str, Any]],
-    seen_types: set[str],
-    lines: list[Mapping[str, Any]],
-) -> None:
-    if "merchant_name" in seen_types:
-        return
-    for index in range(0, min(len(lines), 40)):
-        source_line = lines[index]
-        source_text = _safe_line_text(source_line)
-        if not source_text:
-            continue
-        parts: list[str] = []
-        for nearby_index in range(index, min(index + 4, len(lines))):
-            text = _safe_line_text(lines[nearby_index])
-            if not text:
-                continue
-            compact = _compact_line(text)
-            if (
-                DATE_CANDIDATE_PATTERN.search(text)
-                or BUSINESS_NUMBER_CANDIDATE_PATTERN.search(text)
-                or PHONE_LIKE_PATTERN.search(text)
-                or CARD_LIKE_PATTERN.search(text)
-                or _last_reasonable_amount(text) is not None
-                or _has_blocking_non_amount_label(compact)
-            ):
-                break
-            parts.append(text)
-            combined = " ".join(parts)
-            merchant_name = find_merchant_by_name_fragment(combined)
-            if not merchant_name:
-                continue
-            _append_candidate(
-                candidates,
-                seen_types,
-                candidate_type="merchant_name",
-                key="merchant_name",
-                value=merchant_name,
-                source_block_id=str(source_line.get("block_id") or ""),
-                confidence=_optional_float(source_line.get("confidence")),
-            )
-            return
-
-
 def _normalize_contextual_merchant_candidates(
     candidates: list[dict[str, Any]],
     lines: list[Mapping[str, Any]],
@@ -1916,20 +2608,128 @@ def _normalize_contextual_merchant_candidates(
     if not merchant_candidate:
         return
     merchant_value = str(merchant_candidate.get("normalized_value") or merchant_candidate.get("value") or "")
-    merchant_compact = _compact_line(merchant_value)
-    if merchant_compact != "프라자주유소":
-        return
-    nearby_known = next(
-        (
-            known
-            for known in (find_merchant_by_name_fragment(_safe_line_text(line)) for line in lines[:12])
-            if known
-        ),
-        None,
+    replacement = _best_contextual_merchant_value(lines)
+    if replacement and _should_replace_contextual_merchant(merchant_value, replacement):
+        merchant_candidate["value"] = replacement
+        merchant_candidate["normalized_value"] = replacement
+
+
+def _should_replace_contextual_merchant(current: str, replacement: str) -> bool:
+    current_compact = _compact_line(current)
+    replacement_compact = _compact_line(replacement)
+    if not replacement_compact or replacement_compact == current_compact:
+        return False
+    if _is_weak_contextual_merchant_value(current):
+        return True
+    return False
+
+
+def _is_weak_contextual_merchant_value(value: str) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return True
+    compact = _compact_line(text)
+    weak_tokens = (
+        "\ubc88\ud638",
+        "\uc2b9\uc778",
+        "\uc804\ud654",
+        "\uc8fc\uc18c",
+        "\uae08\uc561",
+        "\ud569\uacc4",
+        "\uac70\ub798",
+        "\ub300\ud45c",
+        "\ub300\ud45c\uc790",
+        "\uc131\uba85",
+        "\uac00\ub9f9\uc810\uc6a9",
     )
-    if nearby_known and "현대오일뱅크" in nearby_known:
-        merchant_candidate["value"] = nearby_known
-        merchant_candidate["normalized_value"] = nearby_known
+    if any(token in compact for token in weak_tokens):
+        return True
+    if compact in {"\uc8fc\uc720\uc18c", "\uc57d\uad6d", "\uc0bc\uacc4\ud0d5", "\uc0c1\uc810"}:
+        return True
+    if len(re.sub(r"[^0-9A-Za-z\uac00-\ud7a3]", "", text)) <= 3 and not _has_contextual_business_marker(text):
+        return True
+    return False
+
+
+def _best_contextual_merchant_value(lines: list[Mapping[str, Any]]) -> str | None:
+    scored: list[tuple[int, int, str]] = []
+    for index, line in enumerate(lines[:45]):
+        text = _safe_line_text(line)
+        if not text:
+            continue
+        raw_candidate = _expanded_contextual_merchant_text(
+            lines,
+            index,
+            _labeled_merchant_value(text) or _strip_leading_store_number(text),
+        )
+        normalized = raw_candidate
+        candidate_line = {"text": normalized, "normalized_text": normalized, "confidence": line.get("confidence")}
+        if not _is_business_block_merchant_candidate(candidate_line):
+            continue
+        if _is_nearby_owner_name_candidate(lines, index):
+            continue
+        compact = _compact_line(normalized)
+        score = 0
+        if _has_contextual_business_marker(normalized):
+            score += 15
+        score += min(len(compact), 20)
+        score -= index // 2
+        scored.append((score, -index, normalized))
+    if not scored:
+        return None
+    return sorted(scored, reverse=True)[0][2]
+
+
+def _expanded_contextual_merchant_text(lines: list[Mapping[str, Any]], index: int, text: str) -> str:
+    candidate = str(text or "").strip()
+    compact = _compact_line(candidate)
+    if compact not in {"\uc8fc\uc720\uc18c", "\uc57d\uad6d", "\uc0bc\uacc4\ud0d5"}:
+        return candidate
+    fragments: list[str] = []
+    for previous_index in range(index - 1, max(index - 5, -1), -1):
+        previous_text = _safe_line_text(lines[previous_index]) or ""
+        previous_compact = _compact_line(previous_text)
+        if not previous_text or _is_nearby_owner_name_candidate(lines, previous_index):
+            continue
+        if re.fullmatch(r"[\uac00-\ud7a3]{2,4}", previous_compact) and not _has_contextual_business_marker(previous_text):
+            continue
+        if _looks_like_address_fragment(previous_compact):
+            continue
+        if any(token in previous_compact for token in ("\ub300\ud45c", "\uc8fc\uc18c", "\uc804\ud654", "\uae08\uc561", "\ud569\uacc4")):
+            continue
+        if not re.search(r"[\uac00-\ud7a3A-Za-z]", previous_text):
+            continue
+        fragments.insert(0, previous_text)
+        if len("".join(fragments)) >= 4:
+            break
+    if not fragments:
+        return candidate
+    return "".join(fragments + [candidate])
+
+
+def _has_contextual_business_marker(value: str) -> bool:
+    compact = _compact_line(value)
+    markers = (
+        "\uc8fc\uc720\uc18c",
+        "\ud734\uac8c\uc18c",
+        "\uc2dd\ub2f9",
+        "\uae40\ubc25",
+        "\ub9c8\ud2b8",
+        "\uc57d\uad6d",
+        "\uc740\ud589",
+        "\uc0bc\uacc4\ud0d5",
+        "\uce74\uce20",
+        "\ud55c\uc6b0",
+        "\uce74\ud398",
+        "\ucee4\ud53c",
+        "\ubcf8\uc810",
+        "\uc9c0\uc810",
+        "\uc9c1\uc601\uc810",
+        "\uc0c1\uc810",
+        "\ud14c\uc2a4\ud2b8\uc810",
+        "fresh",
+    )
+    return any(marker in compact for marker in markers) or compact.endswith("\uc810")
 
 
 def _tax_summary_amount_sequence(lines: list[Mapping[str, Any]], start_index: int, *, max_lines: int) -> tuple[int, int, int] | None:
@@ -2164,71 +2964,6 @@ def _append_card_sales_total_adjacent_amount_candidate(
         for candidate_type in ("paid_amount", "final_amount", "total_amount"):
             _append_amount_candidate(candidates, seen_types, candidate_type, amount, source_block_id, confidence)
         return
-
-
-def _append_card_receipt_split_tax_summary_candidates(
-    candidates: list[dict[str, Any]],
-    seen_types: set[str],
-    lines: list[Mapping[str, Any]],
-) -> None:
-    if {"total_amount", "final_amount", "paid_amount"} & seen_types:
-        return
-    if not _has_card_evidence(lines):
-        return
-    for index, line in enumerate(lines[:100]):
-        text = _safe_line_text(line) or ""
-        compact = _compact_line(text)
-        if "\uc6d0" not in compact:
-            continue
-        digits = re.sub(r"\D", "", text)
-        if not re.fullmatch(r"[1-9]\d{4,5}", digits):
-            continue
-        observed_amount = int(digits)
-        corrected_total = observed_amount * 10
-        if corrected_total < 100_000 or corrected_total > 1_000_000:
-            continue
-        split_amounts = _split_tax_amount_options_near_total(lines, index)
-        for supply_amount in split_amounts:
-            if supply_amount < 100_000 or supply_amount >= corrected_total:
-                continue
-            for vat_amount in split_amounts:
-                if vat_amount < 10_000 or vat_amount >= supply_amount:
-                    continue
-                if abs(round(supply_amount / 10) - vat_amount) > 2:
-                    continue
-                if abs((supply_amount + vat_amount) - corrected_total) > 2:
-                    continue
-                source_block_id = str(line.get("block_id") or "")
-                confidence = _optional_float(line.get("confidence"))
-                _append_amount_candidate(candidates, seen_types, "supply_amount", supply_amount, source_block_id, confidence)
-                _append_amount_candidate(candidates, seen_types, "vat_amount", vat_amount, source_block_id, confidence)
-                _append_amount_candidate(candidates, seen_types, "final_amount", corrected_total, source_block_id, confidence)
-                _append_amount_candidate(candidates, seen_types, "paid_amount", corrected_total, source_block_id, confidence)
-                _append_amount_candidate(candidates, seen_types, "total_amount", corrected_total, source_block_id, confidence)
-                return
-
-
-def _split_tax_amount_options_near_total(lines: list[Mapping[str, Any]], total_index: int) -> set[int]:
-    fragments: list[tuple[int, str]] = []
-    for nearby_index in range(max(total_index - 14, 0), total_index):
-        text = _safe_line_text(lines[nearby_index]) or ""
-        fragment = _tax_summary_fragment_digits(text)
-        if fragment is None:
-            continue
-        if not re.fullmatch(r"[1-9]\d{0,2}", fragment):
-            continue
-        fragments.append((nearby_index, fragment))
-
-    amounts: set[int] = set()
-    for left_offset, (left_index, left_fragment) in enumerate(fragments):
-        for right_index, right_fragment in fragments[left_offset + 1 :]:
-            if right_index - left_index > 4:
-                continue
-            if len(right_fragment) == 3:
-                amounts.add(int(f"{left_fragment}{right_fragment}"))
-            if len(left_fragment) == 3:
-                amounts.add(int(f"{right_fragment}{left_fragment}"))
-    return {amount for amount in amounts if 100 <= amount <= 1_000_000}
 
 
 def _tax_summary_fragment_digits(text: str) -> str | None:
@@ -2518,6 +3253,11 @@ def _joined_korean_date_fragment(lines: list[Mapping[str, Any]], index: int) -> 
             day = int(same_line_day_match.group(1))
             if 1 <= day <= 31:
                 return f"{year_month_match.group(1)}-{int(year_month_match.group(2)):02d}-{day:02d}"
+        noisy_day_match = re.search(r"[\uc6d4\uc6d0]\s*(\d{2,3})(?:\D|$)", text)
+        if noisy_day_match and _has_nearby_time_fragment(lines, index, max_lines=8):
+            day = int(noisy_day_match.group(1)[-2:])
+            if 1 <= day <= 31:
+                return f"{year_month_match.group(1)}-{int(year_month_match.group(2)):02d}-{day:02d}"
         for nearby_index in range(max(index - 4, 0), min(index + 5, len(lines))):
             if nearby_index == index:
                 continue
@@ -2532,7 +3272,8 @@ def _joined_korean_date_fragment(lines: list[Mapping[str, Any]], index: int) -> 
     if not year_match:
         return None
     year = year_match.group(1)
-    month: str | None = None
+    month_match = re.search(r"년\s*(\d{1,2})", text)
+    month: str | None = month_match.group(1) if month_match else None
     day: str | None = None
     for nearby_index in range(index + 1, min(index + 8, len(lines))):
         candidate_text = _safe_line_text(lines[nearby_index])
@@ -2600,10 +3341,10 @@ def _flexible_date_candidate_from_text(text: str) -> str | None:
     return None
 
 
-def _has_nearby_time_fragment(lines: list[Mapping[str, Any]], index: int) -> bool:
-    for nearby_index in range(index + 1, min(index + 3, len(lines))):
+def _has_nearby_time_fragment(lines: list[Mapping[str, Any]], index: int, *, max_lines: int = 2) -> bool:
+    for nearby_index in range(index + 1, min(index + max_lines + 1, len(lines))):
         text = _safe_line_text(lines[nearby_index]) or ""
-        if re.search(r"\b\d{1,2}:\d{2}(?::\d{2})?\b", text):
+        if re.search(r"\d{1,2}:\d{2}(?::\d{2})?", text):
             return True
     return False
 
@@ -2612,6 +3353,8 @@ def _labeled_short_date_fragment(lines: list[Mapping[str, Any]], index: int) -> 
     text = _safe_line_text(lines[index])
     if not text:
         return None
+    if "년" in text or "월" in text:
+        return None  # Korean date pieces must retain their markers, not borrow digits from a time.
     digits = re.sub(r"\D", "", text)
     if len(digits) < 6:
         return None
@@ -3020,12 +3763,20 @@ def _labeled_business_number_prefix_fragment(lines: list[Mapping[str, Any]], ind
 
 
 def _labeled_merchant_value(text: str) -> str | None:
+    if re.match(r"\s*[\[(]?\s*가\s*맹\s*점\s*(?:#|번호|no\b)", text, re.IGNORECASE):
+        return None
     for label in sorted(MERCHANT_LABELS, key=len, reverse=True):
         flexible_label = r"\s*".join(re.escape(char) for char in label)
-        match = re.match(rf"\s*{flexible_label}\s*[:\-\u2013\u2014]?\s*(.+?)\s*$", text)
+        match = re.match(rf"\s*[\[（(〈<]?\s*{flexible_label}\s*[\]）)〉>]?\s*[:\-\u2013\u2014]?\s*(.+?)\s*$", text)
+        if not match:
+            noisy_label = r"\s*\d?\s*".join(re.escape(char) for char in label)
+            match = re.match(rf"\s*{noisy_label}\s*[:：]\s*(.+?)\s*$", text)
         if not match:
             continue
         value = str(match.group(1) or "").strip()
+        # A second labeled column belongs to its own field, not the merchant.
+        value = re.split(r"\s+(?:대표자|대표|성명|사업자등록번호|사업자번호|주소|전화|TE[LIl1])(?:\s*[:：]|\s*$)",
+                         value, maxsplit=1, flags=re.IGNORECASE)[0].strip()
         if not value or value == "[REDACTED]":
             return None
         value = _strip_leading_store_number(value)
@@ -3035,13 +3786,15 @@ def _labeled_merchant_value(text: str) -> str | None:
             return None
         if PHONE_LIKE_PATTERN.search(value) or CARD_LIKE_PATTERN.search(value):
             return None
-        if _last_reasonable_amount(value) is not None:
+        if _is_standalone_amount_line(value):
+            return None
+        if re.search(r"(?:^|\s)\d{6,}(?:\s|$)", value):
             return None
         if _is_labeled_merchant_noise_value(value):
             return None
         if not _looks_like_labeled_merchant_value(value):
             return None
-        return find_merchant_by_name_fragment(value) or value
+        return value
     return None
 
 
@@ -3086,12 +3839,26 @@ def _next_labeled_merchant_value(lines: list[Mapping[str, Any]], index: int) -> 
         if _is_nearby_owner_name_candidate(lines, nearby_index):
             continue
         if _looks_like_labeled_merchant_value(candidate):
-            return find_merchant_by_name_fragment(candidate) or candidate
+            return candidate
     return None
 
 
 def _is_labeled_merchant_noise_value(text: str) -> bool:
     compact = _compact_line(text)
+    noisy_tokens = (
+        "\ubc88\ud638",
+        "\uc785\ub825\ubc88\ud638",
+        "\uac00\ub9f9\uc810\ubc88\ud638",
+        "\uc2b9\uc778\ubc88\ud638",
+        "\uce74\ub4dc\ubc88\ud638",
+        "\uc0ac\uc5c5\uc790\ubc88\ud638",
+        "\uc804\ud654",
+        "\ub300\ud45c",
+        "\ub300\ud45c\uc790",
+        "\uc131\uba85",
+    )
+    if any(token in compact for token in noisy_tokens):
+        return True
     noise_values = {
         "실제와",
         "주소가",
@@ -3121,6 +3888,26 @@ def _is_nearby_owner_name_candidate(lines: list[Mapping[str, Any]], index: int) 
     return any(marker in nearby_compact for marker in ("대표", "대표자", "성명", "주인"))
 
 
+def _is_nearby_owner_name_candidate(lines: list[Mapping[str, Any]], index: int) -> bool:
+    text = _safe_line_text(lines[index]) or ""
+    compact = _compact_line(text)
+    if any(marker in compact for marker in ("\ub300\ud45c", "\ub300\ud45c\uc790", "\uc131\uba85")):
+        return True
+    if not re.fullmatch(r"[\uac00-\ud7a3]{2,4}", compact):
+        return False
+    nearby_compact = _compact_line(
+        " ".join(
+            _safe_line_text(lines[nearby_index]) or ""
+            for nearby_index in range(max(index - 2, 0), min(index + 4, len(lines)))
+            if nearby_index != index
+        )
+    )
+    return any(
+        marker in nearby_compact
+        for marker in ("\ub300\ud45c", "\ub300\ud45c\uc790", "\uc131\uba85", "\uc8fc\uc778")
+    )
+
+
 def _business_block_merchant_value(lines: list[Mapping[str, Any]], index: int) -> str | None:
     text = _safe_line_text(lines[index])
     if not text:
@@ -3135,14 +3922,35 @@ def _business_block_merchant_value(lines: list[Mapping[str, Any]], index: int) -
     merchant_from_same_line = _merchant_value_before_business_number(text)
     if merchant_from_same_line:
         return merchant_from_same_line
-    merchant_from_business_number = find_merchant_by_business_number(text)
-    if merchant_from_business_number and ("사업자" in compact or "사업자등록" in compact):
-        return merchant_from_business_number
+    nearby_candidates: list[tuple[int, str]] = []
+    for previous_index in range(index - 1, max(index - 10, -1), -1):
+        candidate_line = lines[previous_index]
+        parts = candidate_line.get("source_lines", [])
+        if len(parts) > 1 and _is_business_block_merchant_candidate(parts[0]):
+            first_box, next_box = parts[0]["bbox"], parts[1]["bbox"]
+            height = max(y for _, y in first_box) - min(y for _, y in first_box)
+            gap = min(x for x, _ in next_box) - max(x for x, _ in first_box)
+            if gap > height * 3 and not _is_business_block_merchant_candidate(parts[1]):
+                candidate_line = parts[0]
+        if _is_nearby_owner_name_candidate(lines, previous_index):
+            continue
+        if not _is_business_block_merchant_candidate(candidate_line):
+            continue
+        candidate = _safe_line_text(candidate_line)
+        if not candidate:
+            continue
+        normalized = _clean_inline_merchant_segment(candidate)
+        score = min(len(_compact_line(normalized)), 20) - (index - previous_index)
+        if _has_contextual_business_marker(normalized):
+            score += 15
+        nearby_candidates.append((score, normalized))
+    if nearby_candidates:
+        return sorted(nearby_candidates, reverse=True)[0][1]
     for previous_index in range(index - 1, max(index - 8, -1), -1):
         candidate_line = lines[previous_index]
         if _is_business_block_merchant_candidate(candidate_line):
             candidate = _safe_line_text(candidate_line)
-            return find_merchant_by_name_fragment(candidate) or candidate
+            return candidate
     return None
 
 
@@ -3172,7 +3980,7 @@ def _app_screen_merchant_value(lines: list[Mapping[str, Any]], index: int) -> st
         or "\uce74\ub4dc\uc774\ub984" in next_compact
     ):
         return None
-    return find_merchant_by_name_fragment(candidate) or candidate
+    return candidate
 
 
 def _is_app_navigation_label(lines: list[Mapping[str, Any]], index: int) -> bool:
@@ -3233,7 +4041,7 @@ def _clean_inline_merchant_segment(value: str) -> str:
         text,
     )
     text = re.sub(r"^\s*\d{1,4}\s*[\).,:\-]?\s+", "", text)
-    return text.strip(" \t\r\n-–—_.,;·")
+    return text.strip(" \t\r\n-–—_.,;·/")
 
 
 def _is_inline_business_number_merchant_candidate(text: str) -> bool:
@@ -3274,24 +4082,12 @@ def _is_inline_business_number_merchant_candidate(text: str) -> bool:
     return _looks_like_business_block_merchant(value)
 
 
-def _top_known_merchant_value(lines: list[Mapping[str, Any]], index: int) -> str | None:
-    if index > 5:
-        return None
+def _header_or_branch_merchant_value(lines: list[Mapping[str, Any]], index: int) -> str | None:
     line = lines[index]
     text = _safe_line_text(line)
     if not text:
         return None
-    known_merchant = find_merchant_by_name_fragment(text)
-    if known_merchant:
-        return known_merchant
-    compact = _compact_line(text)
-    if "gste" in compact:
-        return "GS THE FRESH"
-    if "\uc0bc\uc131\uc804\uc790\uc11c\ube44\uc2a4" in compact:
-        return "\uc0bc\uc131\uc804\uc790\uc11c\ube44\uc2a4"
-    if "baskin" in compact or "robbins" in compact or "\ubc30\uc2a4\ud0a8\ub77c\ube48\uc2a4" in compact:
-        return "\ubc30\uc2a4\ud0a8\ub77c\ube48\uc2a4"
-    if not any(marker in compact for marker in TOP_MERCHANT_SUFFIX_MARKERS):
+    if index > 5 and not _compact_line(text).endswith("점"):
         return None
     if not _is_business_block_merchant_candidate(line):
         return None
@@ -3304,16 +4100,35 @@ def _is_business_block_merchant_candidate(line: Mapping[str, Any]) -> bool:
     if not text or text == "[REDACTED]":
         return False
     confidence = _optional_float(line.get("confidence"))
-    if confidence is not None and confidence < 0.85:
-        return False
     if len(text) > 80:
         return False
     compact = _compact_line(text)
+    has_strong_business_marker = _has_contextual_business_marker(text)
+    if confidence is not None and confidence < 0.85 and not (has_strong_business_marker and confidence >= 0.72):
+        return False
+    unicode_blocked_tokens = (
+        "\ub300\ud45c",
+        "\ub300\ud45c\uc790",
+        "\uc131\uba85",
+        "\uc8fc\uc18c",
+        "\uc804\ud654",
+        "\uc2b9\uc778",
+        "\ubc88\ud638",
+        "\ud569\uacc4",
+        "\ucd1d\uae08\uc561",
+        "\uae08\uc561",
+        "\uac70\ub798\uae08\uc561",
+        "\uac00\ub9f9\uc810\uc6a9",
+        "\uacf5\uae09",
+        "\ubd80\uac00",
+    )
+    if any(token in compact for token in unicode_blocked_tokens):
+        return False
     if DATE_CANDIDATE_PATTERN.search(text) or BUSINESS_NUMBER_CANDIDATE_PATTERN.search(text):
         return False
     if PHONE_LIKE_PATTERN.search(text) or CARD_LIKE_PATTERN.search(text):
         return False
-    if _last_reasonable_amount(text) is not None:
+    if _last_reasonable_amount(text) is not None and not re.search(r"[\uac00-\ud7a3A-Za-z]", text):
         return False
     if not _looks_like_business_block_merchant(text):
         return False
@@ -3352,6 +4167,8 @@ def _looks_like_labeled_merchant_value(text: str) -> bool:
     if len(value) < 2:
         return False
     compact = _compact_line(value)
+    if (_looks_like_address_fragment(compact) and re.search(r"\d", compact)) or re.match(r"^[\[（(]?\s*(?:주\s*소|대표|전화|사업자)", value):
+        return False
     if compact in {"사업", "자번호", "사업자", "사업자번호", "전화", "전화번", "대표자"}:
         return False
     if re.fullmatch(r"[\d\s:._-]+", value):
@@ -3366,6 +4183,20 @@ def _looks_like_business_block_merchant(text: str) -> bool:
     if re.fullmatch(r"[\d\s:._/-]+", value):
         return False
     compact = _compact_line(value)
+    unicode_noise_tokens = (
+        "\ubc88\ud638",
+        "\uc785\ub825\ubc88\ud638",
+        "\uc2b9\uc778",
+        "\uc8fc\uc18c",
+        "\uc804\ud654",
+        "\ub300\ud45c",
+        "\ub300\ud45c\uc790",
+        "\uc131\uba85",
+        "\uae08\uc561",
+        "\ud569\uacc4",
+    )
+    if any(token in compact for token in unicode_noise_tokens):
+        return False
     noise_tokens = (
         "영수증",
         "고객용",
@@ -3408,9 +4239,13 @@ def _looks_like_business_block_merchant(text: str) -> bool:
         "식품",
         "호텔",
         "리조트",
+        "공단",
+        "서비스",
         "비엠",
         "fresh",
     )
+    if _has_contextual_business_marker(value):
+        return True
     return any(marker in compact for marker in business_markers)
 
 
@@ -3435,6 +4270,8 @@ def _looks_like_address_fragment(compact: str) -> bool:
         "제주특별자치도",
     )
     if any(marker in compact for marker in province_markers):
+        return True
+    if re.match(r"^(?:(?:서울|부산|대구|인천|광주|대전|울산|세종|경기|강원|충북|충남|전북|전남|경북|경남|제주))?[가-힣]{2,8}(?:시|군|구)[가-힣]{1,12}(?:동|읍|면|로|길)\d", compact):
         return True
     if re.fullmatch(r"[가-힣]{2,8}(?:시|군|구|동|읍|면|로|길)", compact):
         return True
@@ -3493,6 +4330,7 @@ def _nearby_labeled_amount(
     prefer_largest: bool = False,
 ) -> int | None:
     amounts: list[int] = []
+    tax_label = _has_any_label(_compact_line(_safe_line_text(lines[index]) or ""), SUPPLY_LABELS + VAT_LABELS)
     for nearby_index in range(index + 1, min(index + max_lines + 1, len(lines))):
         candidate_text = _safe_line_text(lines[nearby_index])
         if not candidate_text:
@@ -3511,7 +4349,7 @@ def _nearby_labeled_amount(
             if prefer_largest:
                 continue
             return amount
-        if amount < 1000:
+        if amount < 1000 and not (allow_zero and tax_label):
             continue
         if not prefer_largest:
             return amount
@@ -3784,13 +4622,14 @@ def _amount_fragment_digits(text: str, *, allow_zero_group: bool = False) -> str
         return None
     if PHONE_LIKE_PATTERN.search(stripped) or CARD_LIKE_PATTERN.search(stripped):
         return None
-    translated = stripped.translate(str.maketrans({"O": "0", "o": "0", "I": "1", "l": "1", "|": "1", "B": "8", "S": "5", "\u3147": "0", "\uacf5": "0"}))
+    translated = stripped.translate(str.maketrans({"O": "0", "o": "0", "I": "1", "l": "1", "|": "1", "B": "8", "S": "5", "t": "0", "T": "0", "\u3147": "0", "\uacf5": "0"}))
     digits = re.sub(r"\D", "", translated)
     if not digits:
         return None
     if allow_zero_group and set(digits) == {"0"} and len(digits) >= 3:
         return "000"
-    if not re.fullmatch(r"[0-9]{1,3}", re.sub(r"\s+", "", translated)):
+    fragment_text = re.sub(r"[\uc6d0\u20a9\s,\.]", "", translated)
+    if not re.fullmatch(r"[0-9]{1,3}", fragment_text):
         return None
     if int(digits) <= 9 and not (allow_zero_group and len(digits) == 3 and set(digits) == {"0"}):
         return None
@@ -3835,7 +4674,7 @@ def _loose_trailing_amount_fragment_digits(text: str) -> str | None:
         return None
     if PHONE_LIKE_PATTERN.search(stripped) or CARD_LIKE_PATTERN.search(stripped):
         return None
-    translated = stripped.translate(str.maketrans({"O": "0", "o": "0", "I": "1", "l": "1", "|": "1", "B": "8", "S": "5", "\u3147": "0", "\uacf5": "0"}))
+    translated = stripped.translate(str.maketrans({"O": "0", "o": "0", "I": "1", "l": "1", "|": "1", "B": "8", "S": "5", "t": "0", "T": "0", "\u3147": "0", "\uacf5": "0"}))
     digits = re.sub(r"\D", "", translated)
     if len(digits) != 3:
         return None
@@ -3846,6 +4685,7 @@ def _loose_trailing_amount_fragment_digits(text: str) -> str | None:
 
 
 def _last_reasonable_amount(text: str, *, allow_zero: bool = False) -> int | None:
+    text = re.sub(r'\bPOS(?:NO)?[\s.:#-]*\d+(?:-\d+)*', '', text or '', flags=re.I)
     amounts = [
         amount
         for token in AMOUNT_CANDIDATE_PATTERN.findall(text or "")
@@ -3860,7 +4700,7 @@ def _normalize_amount_candidate(token: object, *, source_text: str, allow_zero: 
     text = str(token or "").strip()
     if not text:
         return None
-    if not re.search(r"\d", text):
+    if not re.search(r"\d", text) and not (allow_zero and re.fullmatch(r"[Ooㅇ]+", text)):
         return None
     translated = text.translate(str.maketrans({"O": "0", "o": "0", "I": "1", "l": "1", "|": "1", "B": "8", "S": "5", "\u3147": "0", "\uacf5": "0"}))
     grouped = bool(re.search(r"\d\s*[,\.]\s*\d{3}|\d\s+\d{3}", translated))
@@ -3875,8 +4715,8 @@ def _normalize_amount_candidate(token: object, *, source_text: str, allow_zero: 
         amount = int(digits)
     except ValueError:
         return None
-    if amount == 0 and allow_zero:
-        return 0
+    if 0 <= amount <= 9 and allow_zero:
+        return amount
     if amount <= 9 or amount > 10_000_000:
         return None
     return -amount if translated.lstrip().startswith(("-", "－", "−", "–", "—")) else amount

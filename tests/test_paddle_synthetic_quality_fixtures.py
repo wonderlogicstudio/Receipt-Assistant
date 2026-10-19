@@ -756,8 +756,8 @@ def test_parser_estimates_vat_from_explicit_supply_difference_without_confirming
     )
 
     assert record.vat_amount is None
-    assert record.estimated_supply_amount == 41820
-    assert record.estimated_vat_amount == 4180
+    assert record.estimated_supply_amount is None
+    assert record.estimated_vat_amount is None
 
 
 def test_parser_uses_standalone_total_label_and_does_not_treat_supply_as_vat() -> None:
@@ -797,7 +797,7 @@ def test_parser_uses_standalone_total_label_and_does_not_treat_supply_as_vat() -
 
     assert record.vat_amount is None
     assert record.supply_amount == 5091
-    assert record.estimated_vat_amount == 509
+    assert record.estimated_vat_amount is None
 
 
 def test_candidate_hint_builder_reconstructs_split_date_and_business_number_fragments() -> None:
@@ -857,11 +857,11 @@ def test_candidate_hint_builder_reconstructs_business_number_before_next_label()
     assert candidates["merchant_name"] == "종각역점"
 
 
-def test_parser_uses_larger_paid_amount_when_split_total_is_lower_without_discount() -> None:
+def test_parser_preserves_explicit_total_when_a_different_paid_amount_is_larger() -> None:
     record = parse_synthetic_case(
         {
             "sample_id": "synthetic_paid_corrects_low_split_total_001",
-            "description": "명확한 결제금액이 낮게 조합된 합계 후보보다 큰 경우",
+            "description": "명시 합계와 더 큰 결제 후보가 충돌하면 합계를 보존하고 검수 안내",
             "source_file_name": "synthetic_paid_corrects_low_split_total_001.jpg",
             "paddle_lines": [
                 {"text": "사업자등록번호 104-81-91189", "confidence": 0.99},
@@ -874,8 +874,8 @@ def test_parser_uses_larger_paid_amount_when_split_total_is_lower_without_discou
             "expected": {
                 "business_number": "104-81-91189",
                 "transaction_date": "2026-05-05",
-                "total_amount": 99500,
-                "final_amount": 99500,
+                "total_amount": 66500,
+                "final_amount": 66500,
                 "paid_amount": 99500,
                 "payment_method": "카드",
                 "review_required_expected": True,
@@ -883,8 +883,10 @@ def test_parser_uses_larger_paid_amount_when_split_total_is_lower_without_discou
         }
     )
 
-    assert "total_amount_replaced_by_paid_amount_candidate" in record.amount_warnings
-    assert "final_amount_replaced_by_paid_amount_candidate" in record.amount_warnings
+    assert record.total_amount == 66500
+    assert record.final_amount == 66500
+    assert "final_paid_amount_mismatch" in record.amount_warnings
+    assert "total_amount_replaced_by_paid_amount_candidate" not in record.amount_warnings
 
 
 def test_parser_ignores_supply_amount_inconsistent_with_total_without_explicit_vat() -> None:
@@ -917,7 +919,8 @@ def test_parser_ignores_supply_amount_inconsistent_with_total_without_explicit_v
         }
     )
 
-    assert "supply_amount_inconsistent_with_total_ignored" in record.vat_warnings
+    assert "vat_not_explicit" in record.vat_warnings
+    assert record.estimated_vat_amount is None
 
 
 def test_parser_prefers_explicit_supply_vat_total_for_small_amount_ocr_drift() -> None:
@@ -948,9 +951,9 @@ def test_parser_prefers_explicit_supply_vat_total_for_small_amount_ocr_drift() -
         }
     )
 
-    assert "total_amount_replaced_by_explicit_vat_total" in record.amount_warnings
-    assert "final_amount_replaced_by_explicit_vat_total" in record.amount_warnings
-    assert "paid_amount_replaced_by_explicit_vat_total" in record.amount_warnings
+    assert "total_amount_replaced_by_explicit_vat_total" not in record.amount_warnings
+    assert "final_amount_replaced_by_explicit_vat_total" not in record.amount_warnings
+    assert "paid_amount_replaced_by_explicit_vat_total" not in record.amount_warnings
 
 
 def test_candidate_hint_builder_reconstructs_amount_split_around_total_label() -> None:
@@ -1008,7 +1011,7 @@ def test_candidate_hint_builder_does_not_use_coupon_identifier_as_discount_amoun
     assert "discount_amount" not in candidates
 
 
-def test_parser_infers_discount_from_total_and_paid_difference_when_discount_label_is_broken() -> None:
+def test_parser_does_not_infer_discount_when_label_is_broken() -> None:
     record = parse_synthetic_case(
         {
             "sample_id": "synthetic_broken_discount_label_difference_001",
@@ -1030,8 +1033,8 @@ def test_parser_infers_discount_from_total_and_paid_difference_when_discount_lab
                 "business_number": "211-88-95935",
                 "transaction_date": "2026-05-26",
                 "total_amount": 24400,
-                "discount_amount": 5300,
-                "final_amount": 19100,
+                "discount_amount": None,
+                "final_amount": 24400,
                 "paid_amount": 19100,
                 "payment_method": "카드",
                 "review_required_expected": True,
@@ -1039,7 +1042,7 @@ def test_parser_infers_discount_from_total_and_paid_difference_when_discount_lab
         }
     )
 
-    assert "discount_inferred_from_total_paid_difference" in record.amount_warnings
+    assert "discount_inferred_from_total_paid_difference" not in record.amount_warnings
 
 
 def test_candidate_hint_builder_reconstructs_card_receipt_zero_group_amount() -> None:
@@ -1134,7 +1137,7 @@ def test_candidate_hint_builder_ignores_installment_card_metadata_amount_fragmen
     assert "paid_amount" not in candidates
 
 
-def test_candidate_hint_builder_uses_card_receipt_won_amount_when_payment_label_is_missed() -> None:
+def test_candidate_hint_builder_leaves_won_amount_unassigned_when_payment_label_is_missed() -> None:
     lines = [
         {"block_id": "card-won-p0-l0", "page_index": 0, "line_order": 0, "text": "GS25한화리조트설악", "normalized_text": "GS25한화리조트설악", "confidence": 0.92},
         {"block_id": "card-won-p0-l1", "page_index": 0, "line_order": 1, "text": "2026/05/23", "normalized_text": "2026/05/23", "confidence": 0.90},
@@ -1151,9 +1154,9 @@ def test_candidate_hint_builder_uses_card_receipt_won_amount_when_payment_label_
         for candidate in build_paddle_candidate_hints_from_safe_lines(lines)
     }
 
-    assert candidates["total_amount"] == "2300"
-    assert candidates["final_amount"] == "2300"
-    assert candidates["paid_amount"] == "2300"
+    assert candidates.get("total_amount") is None
+    assert candidates.get("final_amount") is None
+    assert candidates.get("paid_amount") is None
 
 
 def test_candidate_hint_builder_reconstructs_top_tax_total_sequence_without_using_cancel_amount() -> None:
@@ -1334,10 +1337,10 @@ def test_candidate_hint_builder_reconstructs_business_number_when_second_fragmen
     )
 
     assert record.business_number == "762-58-00827"
-    assert record.merchant_name == "승진식품"
+    assert record.merchant_name is None  # Low-confidence text stays unresolved; the number supplies no name.
 
 
-def test_standard_context_prefers_business_number_dictionary_merchant_over_partial_ocr_name() -> None:
+def test_standard_context_preserves_observed_partial_merchant_name() -> None:
     record = parse_synthetic_case(
         {
             "sample_id": "synthetic_business_number_dictionary_merchant_001",
@@ -1352,7 +1355,7 @@ def test_standard_context_prefers_business_number_dictionary_merchant_over_parti
                 {"text": "신용카드 20,000", "confidence": 0.99},
             ],
             "expected": {
-                "merchant_name": "한화호텔앤드리조트(주) 설악",
+                "merchant_name": "한화호텔앤드리조트주",
                 "business_number": "101-81-30747",
                 "transaction_date": "2026-05-24",
                 "total_amount": 20000,
@@ -1365,7 +1368,7 @@ def test_standard_context_prefers_business_number_dictionary_merchant_over_parti
     )
 
     assert record.business_number == "101-81-30747"
-    assert record.merchant_name == "한화호텔앤드리조트(주) 설악"
+    assert record.merchant_name == "한화호텔앤드리조트주"
 
 
 def test_candidate_hint_builder_reconstructs_columnar_tax_summary_amounts() -> None:
@@ -1391,7 +1394,7 @@ def test_candidate_hint_builder_reconstructs_columnar_tax_summary_amounts() -> N
     assert candidates["final_amount"] == "170000"
 
 
-def test_candidate_hint_builder_reconstructs_total_from_compact_tax_amounts() -> None:
+def test_candidate_hint_builder_does_not_create_unlabeled_taxes_or_total() -> None:
     lines = [
         {"block_id": "compact-tax-p0-l0", "page_index": 0, "line_order": 0, "text": "매출", "normalized_text": "매출", "confidence": 1.0},
         {"block_id": "compact-tax-p0-l1", "page_index": 0, "line_order": 1, "text": "2", "normalized_text": "2", "confidence": 1.0},
@@ -1405,10 +1408,10 @@ def test_candidate_hint_builder_reconstructs_total_from_compact_tax_amounts() ->
         for candidate in build_paddle_candidate_hints_from_safe_lines(lines)
     }
 
-    assert candidates["supply_amount"] == "2091"
-    assert candidates["vat_amount"] == "209"
-    assert candidates["total_amount"] == "2300"
-    assert candidates["final_amount"] == "2300"
+    assert "supply_amount" not in candidates
+    assert "vat_amount" not in candidates
+    assert candidates.get("total_amount") != "2300"
+    assert candidates.get("final_amount") != "2300"
     assert candidates["payment_method"] == "카드"
 
 
@@ -1685,7 +1688,7 @@ def test_candidate_hint_builder_treats_korean_zero_as_amount_fragment() -> None:
     assert candidates["final_amount"] == "50000"
 
 
-def test_business_number_dictionary_fills_known_sample_merchant() -> None:
+def test_business_number_does_not_fill_unobserved_merchant() -> None:
     lines = [
         {"text": "사업자등록번호 227-82-06089", "confidence": 0.99},
         {"text": "합계 1,600", "confidence": 0.98},
@@ -1694,15 +1697,15 @@ def test_business_number_dictionary_fills_known_sample_merchant() -> None:
         "sample_id": "synthetic_known_business_merchant_001",
         "source_file_name": "synthetic_known_business_merchant_001.jpg",
         "paddle_lines": lines,
-        "expected": {"merchant_name": "속초시시설관리공단"},
+        "expected": {"merchant_name": None},
     }
 
     record = parse_synthetic_case(case)
 
-    assert record.merchant_name == "속초시시설관리공단"
+    assert record.merchant_name is None
 
 
-def test_business_number_dictionary_fills_human_anchor_sample_merchants() -> None:
+def test_business_number_cannot_inject_any_former_dictionary_merchant() -> None:
     cases = [
         ("101-81-30747", "한화호텔앤드리조트(주) 설악"),
         ("104-81-91189", "롯데 유스컬처빌 파주점"),
@@ -1740,11 +1743,11 @@ def test_business_number_dictionary_fills_human_anchor_sample_merchants() -> Non
                     {"text": f"사업자등록번호 {business_number}", "confidence": 0.99},
                     {"text": "합계 10,000", "confidence": 0.98},
                 ],
-                "expected": {"merchant_name": merchant_name},
+                "expected": {"merchant_name": None},
             }
         )
 
-        assert record.merchant_name == merchant_name
+        assert record.merchant_name is None
 
 
 def test_candidate_hint_builder_uses_merchant_label_value_on_following_line() -> None:
@@ -1798,7 +1801,7 @@ def test_candidate_hint_builder_skips_owner_name_after_spaced_merchant_label() -
     assert candidates["business_number"] == "227-82-06089"
 
 
-def test_candidate_hint_builder_uses_multiline_known_merchant_after_noisy_label_notice() -> None:
+def test_candidate_hint_builder_does_not_expand_brand_to_dictionary_branch() -> None:
     lines = [
         {"block_id": "multiline-known-p0-l0", "page_index": 0, "line_order": 0, "text": "가맹점명", "normalized_text": "가맹점명", "confidence": 0.98},
         {"block_id": "multiline-known-p0-l1", "page_index": 0, "line_order": 1, "text": "실제와", "normalized_text": "실제와", "confidence": 0.98},
@@ -1813,10 +1816,10 @@ def test_candidate_hint_builder_uses_multiline_known_merchant_after_noisy_label_
         for candidate in build_paddle_candidate_hints_from_safe_lines(lines)
     }
 
-    assert candidates["merchant_name"] == "크린에이드 이대역서희스타힐스점"
+    assert candidates["merchant_name"] == "크린에이드"
 
 
-def test_candidate_hint_builder_uses_known_oilbank_fragment() -> None:
+def test_candidate_hint_builder_does_not_replace_observed_station_with_dictionary_name() -> None:
     lines = [
         {"block_id": "oilbank-p0-l0", "page_index": 0, "line_order": 0, "text": "동시D현대오일뱅크", "normalized_text": "동시D현대오일뱅크", "confidence": 0.90},
         {"block_id": "oilbank-p0-l1", "page_index": 0, "line_order": 1, "text": "프라자주유소", "normalized_text": "프라자주유소", "confidence": 0.90},
@@ -1828,7 +1831,7 @@ def test_candidate_hint_builder_uses_known_oilbank_fragment() -> None:
         for candidate in build_paddle_candidate_hints_from_safe_lines(lines)
     }
 
-    assert candidates["merchant_name"] == "현대오일뱅크 프라자주유소"
+    assert candidates["merchant_name"] == "프라자주유소"
 
 
 def test_candidate_hint_builder_uses_top_known_merchant_and_rejects_address_fragments() -> None:
@@ -1870,7 +1873,7 @@ def test_candidate_hint_builder_uses_top_english_fresh_merchant() -> None:
     assert candidates["merchant_name"] == "GS THE FRESH"
 
 
-def test_candidate_hint_builder_maps_gste_header_to_gs_the_fresh() -> None:
+def test_candidate_hint_builder_does_not_expand_incomplete_brand() -> None:
     lines = [
         {"block_id": "gste-p0-l0", "page_index": 0, "line_order": 0, "text": "GSTE", "normalized_text": "GSTE", "confidence": 0.9},
         {"block_id": "gste-p0-l1", "page_index": 0, "line_order": 1, "text": "2026/05/15", "normalized_text": "2026/05/15", "confidence": 0.96},
@@ -1881,10 +1884,10 @@ def test_candidate_hint_builder_maps_gste_header_to_gs_the_fresh() -> None:
         for candidate in build_paddle_candidate_hints_from_safe_lines(lines)
     }
 
-    assert candidates["merchant_name"] == "GS THE FRESH"
+    assert "merchant_name" not in candidates
 
 
-def test_candidate_hint_builder_maps_noisy_gste_header_to_gs_the_fresh() -> None:
+def test_candidate_hint_builder_does_not_expand_noisy_incomplete_brand() -> None:
     lines = [
         {"block_id": "noisy-gste-p0-l0", "page_index": 0, "line_order": 0, "text": "WWW gSTelaIlLCOI", "normalized_text": "WWW gSTelaIlLCOI", "confidence": 0.9},
         {"block_id": "noisy-gste-p0-l1", "page_index": 0, "line_order": 1, "text": "2026/05/15", "normalized_text": "2026/05/15", "confidence": 0.96},
@@ -1895,7 +1898,7 @@ def test_candidate_hint_builder_maps_noisy_gste_header_to_gs_the_fresh() -> None
         for candidate in build_paddle_candidate_hints_from_safe_lines(lines)
     }
 
-    assert candidates["merchant_name"] == "GS THE FRESH"
+    assert "merchant_name" not in candidates
 
 
 def test_candidate_hint_builder_uses_top_samsung_service_merchant() -> None:
@@ -1931,7 +1934,7 @@ def test_candidate_hint_builder_reads_split_card_label_as_payment_method() -> No
     assert candidates["payment_method"] == "카드"
 
 
-def test_candidate_hint_builder_maps_top_baskin_header_to_safe_brand_name() -> None:
+def test_candidate_hint_builder_does_not_translate_brand_using_fixed_answer() -> None:
     lines = [
         {"block_id": "baskin-p0-l0", "page_index": 0, "line_order": 0, "text": "baskiN!31 robbins", "normalized_text": "baskiN!31 robbins", "confidence": 0.9},
         {"block_id": "baskin-p0-l1", "page_index": 0, "line_order": 1, "text": "[정상]", "normalized_text": "[정상]", "confidence": 0.96},
@@ -1944,7 +1947,7 @@ def test_candidate_hint_builder_maps_top_baskin_header_to_safe_brand_name() -> N
         for candidate in build_paddle_candidate_hints_from_safe_lines(lines)
     }
 
-    assert candidates["merchant_name"] == "배스킨라빈스"
+    assert "merchant_name" not in candidates
     assert candidates["transaction_date"] == "2026-05-10"
 
 
@@ -2192,7 +2195,7 @@ def test_parser_receipt_keeps_split_merchant_business_owner_line() -> None:
     assert record.total_amount == 5600
 
 
-def test_parser_prefers_business_anchor_over_short_owner_or_fragment_merchants() -> None:
+def test_parser_does_not_expand_owner_or_branch_fragment_using_business_number() -> None:
     cases = [
         ("synthetic_owner_anchor_sokcho", "이선규", "227-82-06089", "속초시시설관리공단"),
         ("synthetic_market_place_anchor_sokcho", "속초관광수산시장", "227-82-06089", "속초시시설관리공단"),
@@ -2220,7 +2223,7 @@ def test_parser_prefers_business_anchor_over_short_owner_or_fragment_merchants()
             }
         )
 
-        assert record.merchant_name == expected_merchant
+        assert record.merchant_name != expected_merchant
         assert record.business_number == business_number
 
 
@@ -2354,7 +2357,7 @@ def test_candidate_hint_builder_reads_split_total_label_amount_before_receipt_nu
     assert candidates["final_amount"] == "15000"
 
 
-def test_standard_context_uses_dailyfix_business_number_anchor_only_when_identifier_present() -> None:
+def test_standard_context_does_not_restore_unknown_merchant_from_business_number() -> None:
     record = parse_synthetic_case(
         {
             "sample_id": "synthetic_dailyfix_business_anchor_001",
@@ -2378,7 +2381,7 @@ def test_standard_context_uses_dailyfix_business_number_anchor_only_when_identif
         }
     )
 
-    assert record.merchant_name == "데일리픽스 을지로"
+    assert record.merchant_name != "데일리픽스 을지로"
     assert record.business_number == "179-85-02903"
     assert record.total_amount == 15000
 
@@ -2423,7 +2426,7 @@ def test_candidate_hint_builder_recovers_noisy_embedded_approval_datetime() -> N
     assert candidates["transaction_date"] == "20260525 08:57:45"
 
 
-def test_candidate_hint_builder_recovers_split_tax_total_missing_zero() -> None:
+def test_candidate_hint_builder_does_not_repair_missing_zero_using_tax_balance() -> None:
     lines = [
         {"block_id": "split-tax-p0-l0", "page_index": 0, "line_order": 0, "text": "비씨카드", "normalized_text": "비씨카드", "confidence": 0.97},
         {"block_id": "split-tax-p0-l1", "page_index": 0, "line_order": 1, "text": "272원", "normalized_text": "272원", "confidence": 0.96},
@@ -2438,13 +2441,13 @@ def test_candidate_hint_builder_recovers_split_tax_total_missing_zero() -> None:
         for candidate in build_paddle_candidate_hints_from_safe_lines(lines)
     }
 
-    assert candidates["supply_amount"] == "657272"
-    assert candidates["vat_amount"] == "65728"
-    assert candidates["total_amount"] == "723000"
-    assert candidates["final_amount"] == "723000"
+    assert "supply_amount" not in candidates
+    assert "vat_amount" not in candidates
+    assert candidates.get("total_amount") != "723000"
+    assert candidates.get("final_amount") != "723000"
 
 
-def test_candidate_hint_builder_normalizes_noisy_labeled_known_merchant() -> None:
+def test_candidate_hint_builder_preserves_labeled_text_without_dictionary_cleanup() -> None:
     lines = [
         {
             "block_id": "noisy-known-merchant-p0-l0",
@@ -2461,10 +2464,10 @@ def test_candidate_hint_builder_normalizes_noisy_labeled_known_merchant() -> Non
         for candidate in build_paddle_candidate_hints_from_safe_lines(lines)
     }
 
-    assert candidates["merchant_name"] == "플레이월드 파주점"
+    assert candidates["merchant_name"] == "어스즈 플레이월드 파주점 STO"
 
 
-def test_standard_context_normalizes_noisy_known_merchant_without_business_number() -> None:
+def test_standard_context_preserves_observed_name_without_dictionary_cleanup() -> None:
     record = parse_synthetic_case(
         {
             "sample_id": "synthetic_noisy_known_merchant_name_001",
@@ -2485,7 +2488,7 @@ def test_standard_context_normalizes_noisy_known_merchant_without_business_numbe
         }
     )
 
-    assert record.merchant_name == "플레이월드 파주점"
+    assert record.merchant_name == "어스즈 플레이월드 파주점 STO"
 
 
 def test_candidate_hint_builder_does_not_read_approval_number_as_compact_date() -> None:
@@ -2596,6 +2599,190 @@ def test_parser_receipt_keeps_split_contiguous_datetime_and_approval_number() ->
     assert record.transaction_date and record.transaction_date.isoformat() == "2026-05-26"
     assert record.approval_number == "202605252085745"
     assert record.total_amount == 5600
+
+
+def test_parser_prefers_gas_station_total_label_over_quantity_amount() -> None:
+    record = parse_synthetic_case(
+        {
+            "sample_id": "synthetic_additional_gas_station_total_001",
+            "source_file_name": "synthetic_additional_gas_station_total_001.jpg",
+            "paddle_lines": [
+                {"text": "\uacbd\uae30\uad11\uc8fc(\uc11c\uc6b8)\uc8fc\uc720\uc18c", "confidence": 0.96},
+                {"text": "\uc0ac\uc5c5\uc790\ubc88\ud638 214-86-08930", "confidence": 0.98},
+                {"text": "\ubcf4\ud1b5\ud718\ubc1c\uc720 2,012 64.613 130,000", "confidence": 0.93},
+                {"text": "\uacfc\uc138\uae08\uc561 118,182", "confidence": 0.96},
+                {"text": "\ubd80\uac00\uc138 11,818", "confidence": 0.96},
+                {"text": "\ud569\uacc4\uae08\uc561 130,000", "confidence": 0.98},
+                {"text": "2026-06-21", "confidence": 0.98},
+                {"text": "\uc2e0\uc6a9\uce74\ub4dc", "confidence": 0.98},
+            ],
+            "expected": {"review_required_expected": True},
+        }
+    )
+
+    assert record.merchant_name == "\uacbd\uae30\uad11\uc8fc(\uc11c\uc6b8)\uc8fc\uc720\uc18c"
+    assert record.transaction_date and record.transaction_date.isoformat() == "2026-06-21"
+    assert record.total_amount == 130000
+    assert record.final_amount == 130000
+    assert record.vat_amount == 11818
+    assert record.supply_amount == 118182
+
+
+def test_candidate_hint_builder_recovers_split_gas_supply_vat_total() -> None:
+    lines = [
+        {"block_id": "gas-real-p0-l0", "page_index": 0, "line_order": 0, "text": "\uacbd\uae30\uad11\uc8fc\uc11c\uc6b8", "normalized_text": "\uacbd\uae30\uad11\uc8fc\uc11c\uc6b8", "confidence": 0.96},
+        {"block_id": "gas-real-p0-l1", "page_index": 0, "line_order": 1, "text": "\uc774\ub3d9\ud6c8", "normalized_text": "\uc774\ub3d9\ud6c8", "confidence": 0.90},
+        {"block_id": "gas-real-p0-l2", "page_index": 0, "line_order": 2, "text": "\uc8fc\uc720\uc18c", "normalized_text": "\uc8fc\uc720\uc18c", "confidence": 0.94},
+        {"block_id": "gas-real-p0-l3", "page_index": 0, "line_order": 3, "text": "\ubd80\uac00\uc138\uc561", "normalized_text": "\ubd80\uac00\uc138\uc561", "confidence": 0.95},
+        {"block_id": "gas-real-p0-l4", "page_index": 0, "line_order": 4, "text": "11818", "normalized_text": "11818", "confidence": 0.95},
+        {"block_id": "gas-real-p0-l5", "page_index": 0, "line_order": 5, "text": "\uacfc\uc138\uae08\uc561", "normalized_text": "\uacfc\uc138\uae08\uc561", "confidence": 0.95},
+        {"block_id": "gas-real-p0-l6", "page_index": 0, "line_order": 6, "text": "118", "normalized_text": "118", "confidence": 0.95},
+        {"block_id": "gas-real-p0-l7", "page_index": 0, "line_order": 7, "text": "182", "normalized_text": "182", "confidence": 0.95},
+        {"block_id": "gas-real-p0-l8", "page_index": 0, "line_order": 8, "text": "130", "normalized_text": "130", "confidence": 0.95},
+        {"block_id": "gas-real-p0-l9", "page_index": 0, "line_order": 9, "text": "00t0", "normalized_text": "00t0", "confidence": 0.80},
+        {"block_id": "gas-real-p0-l10", "page_index": 0, "line_order": 10, "text": "\ud569\uacc4\uae08\uc561", "normalized_text": "\ud569\uacc4\uae08\uc561", "confidence": 0.95},
+        {"block_id": "gas-real-p0-l11", "page_index": 0, "line_order": 11, "text": "102257", "normalized_text": "102257", "confidence": 0.90},
+    ]
+
+    candidates = {
+        candidate["candidate_type"]: candidate["normalized_value"]
+        for candidate in build_paddle_candidate_hints_from_safe_lines(lines)
+    }
+
+    assert candidates["merchant_name"] == "\uacbd\uae30\uad11\uc8fc\uc11c\uc6b8\uc8fc\uc720\uc18c"
+    assert candidates["supply_amount"] == "118182"
+    assert candidates["vat_amount"] == "11818"
+    assert candidates.get("total_amount") != "130000"  # Tax balance cannot supply a total absent from its label.
+
+
+def test_candidate_hint_builder_reads_split_amount_label_won_total() -> None:
+    lines = [
+        {"block_id": "split-won-p0-l0", "page_index": 0, "line_order": 0, "text": "\uae08", "normalized_text": "\uae08", "confidence": 0.95},
+        {"block_id": "split-won-p0-l1", "page_index": 0, "line_order": 1, "text": "\uc561", "normalized_text": "\uc561", "confidence": 0.95},
+        {"block_id": "split-won-p0-l2", "page_index": 0, "line_order": 2, "text": "\uc2dd\uc0ac\uad50\ud658\uad8c", "normalized_text": "\uc2dd\uc0ac\uad50\ud658\uad8c", "confidence": 0.95},
+        {"block_id": "split-won-p0-l3", "page_index": 0, "line_order": 3, "text": "4500\uc6d0", "normalized_text": "4500\uc6d0", "confidence": 0.95},
+        {"block_id": "split-won-p0-l4", "page_index": 0, "line_order": 4, "text": "\uc2e0\uc6a9\uce74\ub4dc", "normalized_text": "\uc2e0\uc6a9\uce74\ub4dc", "confidence": 0.95},
+    ]
+
+    candidates = {
+        candidate["candidate_type"]: candidate["normalized_value"]
+        for candidate in build_paddle_candidate_hints_from_safe_lines(lines)
+    }
+
+    assert candidates["total_amount"] == "4500"
+    assert candidates["final_amount"] == "4500"
+    assert candidates["paid_amount"] == "4500"
+
+
+def test_parser_uses_labeled_restaurant_name_instead_of_representative_name() -> None:
+    record = parse_synthetic_case(
+        {
+            "sample_id": "synthetic_additional_owner_name_guard_001",
+            "source_file_name": "synthetic_additional_owner_name_guard_001.jpg",
+            "paddle_lines": [
+                {"text": "\uc0c1\ud638: \ud3c9\ucc3d\ud55c\uc6b0\ub9c8\uc744\uba74\uc628", "confidence": 0.93},
+                {"text": "\ub300\ud45c\uc790: \ud669\uc810\uae30", "confidence": 0.99},
+                {"text": "2026\ub14406\uc6d420\uc77c 19:50(\ud1a0)", "confidence": 0.96},
+                {"text": "\uba74\uc138\ubb3c\ud488 172,260", "confidence": 0.95},
+                {"text": "\ud560\uc778\uae08\uc561 8,610", "confidence": 0.95},
+                {"text": "\uce74\ub4dc\uacb0\uc81c 163,640", "confidence": 0.98},
+                {"text": "\uc2e0\uc6a9\uce74\ub4dc", "confidence": 0.98},
+            ],
+            "expected": {"review_required_expected": True},
+        }
+    )
+
+    assert record.merchant_name == "\ud3c9\ucc3d\ud55c\uc6b0\ub9c8\uc744\uba74\uc628"
+    assert record.merchant_name != "\ud669\uc810\uae30"
+    assert record.transaction_date and record.transaction_date.isoformat() == "2026-06-20"
+    assert record.total_amount == 163640
+    assert record.final_amount == 163640
+    assert record.paid_amount == 163640
+
+
+def test_candidate_hint_builder_reads_noisy_korean_date_with_nearby_time() -> None:
+    lines = [
+        {"block_id": "noisy-date-p0-l0", "page_index": 0, "line_order": 0, "text": "2026\ub14406\uc6d4120\uc6d0", "normalized_text": "2026\ub14406\uc6d4120\uc6d0", "confidence": 0.86},
+        {"block_id": "noisy-date-p0-l1", "page_index": 0, "line_order": 1, "text": "19:50CEE", "normalized_text": "19:50CEE", "confidence": 0.86},
+    ]
+
+    candidates = {
+        candidate["candidate_type"]: candidate["normalized_value"]
+        for candidate in build_paddle_candidate_hints_from_safe_lines(lines)
+    }
+
+    assert candidates["transaction_date"] == "2026-06-20"
+
+
+def test_parser_preserves_pharmacy_ocr_spelling_without_fixed_answer() -> None:
+    record = parse_synthetic_case(
+        {
+            "sample_id": "synthetic_additional_pharmacy_ocr_noise_001",
+            "source_file_name": "synthetic_additional_pharmacy_ocr_noise_001.jpg",
+            "paddle_lines": [
+                {"text": "YiA +i+ y+ ot", "confidence": 0.86},
+                {"text": "\ub300\ud64d365\uc57d\uad6d", "confidence": 0.96},
+                {"text": "\uac70\ub798\uc77c\uc2dc 2026-06-21", "confidence": 0.98},
+                {"text": "\ud569\uacc4\uae08\uc561 18,000", "confidence": 0.98},
+                {"text": "\uc2e0\uc6a9\uce74\ub4dc", "confidence": 0.98},
+            ],
+            "expected": {"review_required_expected": True},
+        }
+    )
+
+    assert record.merchant_name == "\ub300\ud64d365\uc57d\uad6d"
+    assert record.transaction_date and record.transaction_date.isoformat() == "2026-06-21"
+    assert record.total_amount == 18000
+
+
+def test_parser_prefers_total_sum_over_supply_like_transaction_amount() -> None:
+    record = parse_synthetic_case(
+        {
+            "sample_id": "synthetic_additional_samgyetang_total_001",
+            "source_file_name": "synthetic_additional_samgyetang_total_001.jpg",
+            "paddle_lines": [
+                {"text": "\uc0c1\ud638", "confidence": 0.96},
+                {"text": "\ubd80\ub07c\uc0bc\uacc4\ud0d5", "confidence": 0.96},
+                {"text": "\ub300\ud45c\uc790 \uae40\uc21c\uc784", "confidence": 0.98},
+                {"text": "\uac70\ub798\uc77c\uc2dc 2026-06-22", "confidence": 0.98},
+                {"text": "\uac70\ub798\uae08\uc561 30,910", "confidence": 0.98},
+                {"text": "\ubd80\uac00\uc138 3,090", "confidence": 0.98},
+                {"text": "\ucd1d\ud569\uacc4 34,000", "confidence": 0.98},
+                {"text": "\uc2e0\uc6a9\uce74\ub4dc", "confidence": 0.98},
+            ],
+            "expected": {"review_required_expected": True},
+        }
+    )
+
+    assert record.merchant_name == "\ubd80\ub07c\uc0bc\uacc4\ud0d5"
+    assert record.transaction_date and record.transaction_date.isoformat() == "2026-06-22"
+    assert record.total_amount == 34000
+    assert record.final_amount == 34000
+    assert record.vat_amount == 3090
+
+
+def test_parser_preserves_transaction_amount_without_inventing_supply_or_total() -> None:
+    record = parse_synthetic_case(
+        {
+            "sample_id": "synthetic_supply_like_total_plus_vat_001",
+            "source_file_name": "synthetic_supply_like_total_plus_vat_001.jpg",
+            "paddle_lines": [
+                {"text": "\uc0c1\ud638", "confidence": 0.96},
+                {"text": "\ubd80\ub07c\uc0bc\uacc4\ud0d5", "confidence": 0.96},
+                {"text": "\uac70\ub798\uc77c\uc2dc 2026-06-22", "confidence": 0.98},
+                {"text": "\uac70\ub798\uae08\uc561 30,910", "confidence": 0.98},
+                {"text": "\ubd80\uac00\uc138", "confidence": 0.98},
+                {"text": "3090", "confidence": 0.98},
+                {"text": "\uc2e0\uc6a9\uce74\ub4dc", "confidence": 0.98},
+            ],
+            "expected": {"review_required_expected": True},
+        }
+    )
+
+    assert record.total_amount == 30910
+    assert record.final_amount == 30910
+    assert record.supply_amount is None
+    assert record.vat_amount == 3090
 
 
 def test_candidate_hint_builder_does_not_use_address_fragment_as_known_merchant() -> None:

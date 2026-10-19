@@ -36,6 +36,7 @@ class AppConfig:
     upload_relative_root: Path = Path("data/uploads")
     output_root: Path = DEFAULT_OUTPUT_ROOT
     app_db_path: Path = DEFAULT_APP_DB_PATH
+    merchant_lookup_db_path: Path | None = None
     max_upload_size_bytes: int = DEFAULT_MAX_UPLOAD_SIZE_BYTES
     allowed_upload_extensions: frozenset[str] = field(default_factory=lambda: DEFAULT_ALLOWED_UPLOAD_EXTENSIONS)
     upload_retention_days: int = DEFAULT_UPLOAD_RETENTION_DAYS
@@ -75,6 +76,7 @@ def get_config() -> AppConfig:
         upload_relative_root=Path("data/uploads"),
         output_root=output_root,
         app_db_path=app_db_path,
+        merchant_lookup_db_path=Path(os.environ['MERCHANT_LOOKUP_DB_PATH']) if os.getenv('MERCHANT_LOOKUP_DB_PATH') else None,
         max_upload_size_bytes=max_upload_size_bytes,
         upload_retention_days=_positive_int_env("UPLOAD_RETENTION_DAYS", DEFAULT_UPLOAD_RETENTION_DAYS),
         output_retention_days=_positive_int_env("OUTPUT_RETENTION_DAYS", DEFAULT_OUTPUT_RETENTION_DAYS),

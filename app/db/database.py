@@ -52,10 +52,14 @@ def _db_path(config: AppConfig | None = None, db_path: Path | str | None = None)
 def get_connection(
     config: AppConfig | None = None,
     db_path: Path | str | None = None,
+    *, read_only: bool = False,
 ) -> Iterator[sqlite3.Connection]:
     path = _db_path(config, db_path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(path)
+    if read_only:
+        connection = sqlite3.connect(path.resolve().as_uri() + '?mode=ro', uri=True)
+    else:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        connection = sqlite3.connect(path)
     connection.row_factory = sqlite3.Row
     try:
         connection.execute("PRAGMA foreign_keys = ON")

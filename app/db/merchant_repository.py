@@ -73,10 +73,19 @@ class MerchantRepository:
         *,
         config: AppConfig | None = None,
         db_path: Path | str | None = None,
+        read_only: bool = False,
     ) -> None:
         self.config = config
         self.db_path = db_path
-        init_db(config=config, db_path=db_path)
+        self.read_only = read_only
+        if read_only:
+            with self._connection() as connection:
+                connection.execute('SELECT 1 FROM merchant_master LIMIT 0')
+        else:
+            init_db(config=config, db_path=db_path)
+
+    def _connection(self):
+        return get_connection(config=self.config, db_path=self.db_path, read_only=self.read_only)
 
     def add_master(self, item: MerchantMasterInput) -> bool:
         return self.add_masters([item]) == 1
@@ -86,7 +95,7 @@ class MerchantRepository:
         values = [item for item in values if item is not None]
         if not values:
             return 0
-        with get_connection(config=self.config, db_path=self.db_path) as connection:
+        with self._connection() as connection:
             before_changes = connection.total_changes
             connection.executemany(_INSERT_MASTER_SQL, values)
             return connection.total_changes - before_changes
@@ -94,7 +103,7 @@ class MerchantRepository:
     def add_masters_stream(self, items: Iterable[MerchantMasterInput], *, chunk_size: int = 5000) -> int:
         inserted = 0
         chunk: list[dict[str, object]] = []
-        with get_connection(config=self.config, db_path=self.db_path) as connection:
+        with self._connection() as connection:
             _apply_bulk_import_pragmas(connection)
             before_changes = connection.total_changes
             for item in items:
@@ -154,7 +163,7 @@ class MerchantRepository:
             "source": source,
             "created_at": _now(),
         }
-        with get_connection(config=self.config, db_path=self.db_path) as connection:
+        with self._connection() as connection:
             existing = connection.execute(
                 """
                 SELECT 1
@@ -319,7 +328,7 @@ class MerchantRepository:
         safe_note = note
         if not safe_note and skipped_invalid_row_count:
             safe_note = f"invalid_rows={max(0, int(skipped_invalid_row_count))}"
-        with get_connection(config=self.config, db_path=self.db_path) as connection:
+        with self._connection() as connection:
             connection.execute(
                 """
                 INSERT INTO merchant_source_log (
@@ -344,7 +353,7 @@ class MerchantRepository:
     def has_source_file_hash(self, source_name: str, source_file_hash: str | None) -> bool:
         if not source_file_hash:
             return False
-        with get_connection(config=self.config, db_path=self.db_path) as connection:
+        with self._connection() as connection:
             row = connection.execute(
                 """
                 SELECT 1
@@ -384,7 +393,7 @@ class MerchantRepository:
         return [*self._query_aliases("1 = 1", [], limit=limit), *self._query_masters("1 = 1", [], limit=limit)][:limit]
 
     def _query_masters(self, where_sql: str, params: list[Any], *, limit: int) -> list[MerchantSearchRow]:
-        with get_connection(config=self.config, db_path=self.db_path) as connection:
+        with self._connection() as connection:
             rows = connection.execute(
                 f"""
                 SELECT id, merchant_name, normalized_merchant_name, business_number,
@@ -430,7 +439,7 @@ class MerchantRepository:
         ]
 
     def _query_aliases(self, where_sql: str, params: list[Any], *, limit: int) -> list[MerchantSearchRow]:
-        with get_connection(config=self.config, db_path=self.db_path) as connection:
+        with self._connection() as connection:
             rows = connection.execute(
                 f"""
                 SELECT

@@ -18,14 +18,31 @@ class DuplicateChecker:
 
     def check(self, records: list[ReceiptRecord]) -> list[ReceiptRecord]:
         updates: dict[str, ReceiptRecord] = {record.id: record for record in records}
-
+        neighbors: dict[str, set[str]] = {record.id: set() for record in records}
         for index, current in enumerate(records):
             for other in records[index + 1 :]:
                 if not self._is_duplicate_candidate(current, other):
                     continue
-                group_id = current.duplicate_group_id or other.duplicate_group_id or f"dup-{uuid4().hex}"
-                updates[current.id] = self._mark_duplicate(updates[current.id], other.id, group_id)
-                updates[other.id] = self._mark_duplicate(updates[other.id], current.id, group_id)
+                neighbors[current.id].add(other.id)
+                neighbors[other.id].add(current.id)
+
+        visited: set[str] = set()
+        for record in records:
+            if record.id in visited or not neighbors[record.id]:
+                continue
+            component: set[str] = set()
+            pending = [record.id]
+            while pending:
+                identifier = pending.pop()
+                if identifier in component:
+                    continue
+                component.add(identifier)
+                pending.extend(neighbors[identifier] - component)
+            visited.update(component)
+            group_id = record.duplicate_group_id or f"dup-{uuid4().hex}"
+            for identifier in component:
+                for candidate_id in sorted(neighbors[identifier]):
+                    updates[identifier] = self._mark_duplicate(updates[identifier], candidate_id, group_id)
 
         return [updates[record.id] for record in records]
 

@@ -5,13 +5,12 @@ import re
 from pathlib import Path
 from typing import Any
 
-from app.classifier.merchant_dictionary import find_merchant_by_business_number, find_merchant_by_name_fragment
 from app.core.enums import EvidenceType, OCRStatus, ReviewStatus
 from app.core.ocr_models import OCRResult
 from app.core.receipt_models import ReceiptRecord
+from app.core.receipt_evidence import is_receipt_instruction
 from app.core.standard_ocr import StandardOCRResult, assert_no_forbidden_ocr_payload
 from app.parser.normalizers import (
-    calculate_estimated_vat_amounts,
     is_overlay_text,
     is_product_line_text,
     is_receipt_metadata_line,
@@ -47,8 +46,6 @@ DISCOUNT_AMOUNT_KEYWORDS = (
     "쿠폰",
     "쿠폰할인",
     "쿠폰 할인",
-    "포인트사용",
-    "포인트 사용",
     "멤버십 할인",
     "KT 할인",
     "행사 할인",
@@ -155,7 +152,6 @@ MERCHANT_JSON_KEYS = (
 MERCHANT_CONTEXT_KEYWORDS = ("사업자번호", "사업자등록번호", "전화", "TEL", "tel", "주소")
 MERCHANT_BUSINESS_KEYWORDS = (
     "마트",
-    "이마트",
     "카페",
     "커피",
     "편의점",
@@ -165,9 +161,6 @@ MERCHANT_BUSINESS_KEYWORDS = (
     "택시",
     "주차",
     "우체국",
-    "스타벅스",
-    "투썸",
-    "다이소",
     "식당",
     "분식",
     "김밥",
@@ -271,6 +264,7 @@ class ReceiptParser:
         _apply_standard_context_candidates(fields, context)
         _apply_standard_context_amounts(fields, context)
         _apply_standard_context_vat(fields, context)
+        _clear_conflicting_context_fields(fields, context)
 
         sensitive_categories = _safe_context_categories(context.sensitive_categories)
         sensitive_warnings = ["sensitive_text_category_detected"] if sensitive_categories else []
@@ -431,23 +425,20 @@ def _context_candidate_json(context: StandardOCRParserContext) -> dict[str, Any]
 
 
 def _apply_standard_context_candidates(fields: dict[str, Any], context: StandardOCRParserContext) -> None:
-    transaction_date = normalize_date(_first_context_value(context.candidate_map, "transaction_date"))
-    merchant_name = normalize_merchant_name(_first_context_value(context.candidate_map, "merchant_name"))
-    business_number_candidate = _first_context_value(context.non_amount_candidate_map, "business_number") or _first_context_value(
+    transaction_date = normalize_date(_first_context_value(context.candidate_map, "transaction_date", normalizer=normalize_date))
+    merchant_name = next((normalize_merchant_name(value) for value in context.candidate_map.get("merchant_name", [])
+                          if _is_usable_merchant_candidate(value, explicit=True)
+                          and not _looks_like_context_merchant_noise(value)), None)
+    business_number_candidate = _first_context_value(context.non_amount_candidate_map, "business_number", normalizer=normalize_business_number) or _first_context_value(
         context.candidate_map,
         "business_number",
+        normalizer=normalize_business_number,
     )
     business_number = normalize_business_number(business_number_candidate)
     payment_method = normalize_merchant_name(_first_context_value(context.candidate_map, "payment_method"))
-    merchant_from_name_fragment = find_merchant_by_name_fragment(merchant_name)
-    if merchant_from_name_fragment:
-        merchant_name = merchant_from_name_fragment
-    merchant_from_business_number = find_merchant_by_business_number(business_number)
-    if not _should_prefer_business_number_merchant(merchant_name, merchant_from_business_number):
-        merchant_from_business_number = None
 
     fields["transaction_date"] = transaction_date or fields["transaction_date"]
-    fields["merchant_name"] = merchant_from_business_number or merchant_name or fields["merchant_name"]
+    fields["merchant_name"] = merchant_name or fields["merchant_name"]
     fields["business_number_candidate"] = business_number_candidate or fields["business_number_candidate"]
     fields["business_number"] = business_number or fields["business_number"]
     fields["payment_method"] = payment_method or fields["payment_method"]
@@ -469,147 +460,76 @@ def _apply_standard_context_amounts(fields: dict[str, Any], context: StandardOCR
     if paid_amount is not None:
         fields["paid_amount"] = paid_amount
 
-    gross_minus_discount = None
-    if fields["gross_amount"] is not None and fields["discount_amount"] is not None:
-        gross_minus_discount = max(fields["gross_amount"] - fields["discount_amount"], 0)
-
     amount_warnings: list[str] = list(fields.get("amount_warnings", []))
     if fields["discount_amount"] is not None and fields["discount_amount"] > 0:
         amount_warnings.append("discount_detected")
-    if (
-        fields["discount_amount"] in (None, 0)
-        and fields["final_amount"] is not None
-        and fields["paid_amount"] is not None
-        and fields["paid_amount"] > fields["final_amount"]
-        and fields["paid_amount"] - fields["final_amount"] >= 10000
-    ):
-        if _is_implausibly_large_paid_amount(fields["paid_amount"], fields["final_amount"]):
-            fields["paid_amount"] = None
-            amount_warnings.append("paid_amount_identifier_candidate_ignored")
-        else:
-            fields["final_amount"] = fields["paid_amount"]
-            amount_warnings.append("final_amount_replaced_by_paid_amount_candidate")
-    if fields["final_amount"] is not None and fields["paid_amount"] is not None and fields["final_amount"] != fields["paid_amount"]:
-        amount_warnings.append("final_paid_amount_mismatch")
-
     if total_amount is not None:
         fields["total_amount"] = total_amount
         fields["amount_source"] = "total_amount"
-        if (
-            fields["discount_amount"] in (None, 0)
-            and fields["paid_amount"] is not None
-            and fields["paid_amount"] > fields["total_amount"]
-            and fields["paid_amount"] - fields["total_amount"] >= 10000
-        ):
-            if _is_implausibly_large_paid_amount(fields["paid_amount"], fields["total_amount"]):
-                fields["paid_amount"] = None
-                amount_warnings.append("paid_amount_identifier_candidate_ignored")
-            else:
-                fields["total_amount"] = fields["paid_amount"]
-                fields["amount_source"] = "paid_amount_corrected_total"
-                amount_warnings.append("total_amount_replaced_by_paid_amount_candidate")
+        if final_amount is None:
+            fields["final_amount"] = total_amount
     else:
         chosen_total, amount_source = _choose_total_amount(
             paid_amount=fields["paid_amount"],
             payment_target_amount=None,
             final_amount=fields["final_amount"],
-            gross_minus_discount=gross_minus_discount,
             gross_amount=fields["gross_amount"],
         )
         fields["total_amount"] = chosen_total
         fields["amount_source"] = amount_source
         if chosen_total is None:
             amount_warnings.append("amount_source_low_confidence")
-    if (
-        fields["discount_amount"] in (None, 0)
-        and fields["total_amount"] is not None
-        and fields["paid_amount"] is not None
-        and fields["total_amount"] > fields["paid_amount"] > 0
-        and fields["total_amount"] - fields["paid_amount"] >= 100
-        and fields["final_amount"] in (None, fields["total_amount"])
-    ):
-        fields["discount_amount"] = fields["total_amount"] - fields["paid_amount"]
-        fields["final_amount"] = fields["paid_amount"]
-        amount_warnings.append("discount_inferred_from_total_paid_difference")
-        amount_warnings = [
-            warning for warning in amount_warnings if warning != "final_paid_amount_mismatch"
-        ]
-
+    if fields["final_amount"] is not None and fields["paid_amount"] is not None and fields["final_amount"] != fields["paid_amount"]:
+        amount_warnings.append("final_paid_amount_mismatch")
     if fields["total_amount"] == 0 and fields["discount_amount"] is not None and fields["discount_amount"] > 0:
         amount_warnings.append("zero_payment_after_discount")
     fields["amount_warnings"] = _unique(amount_warnings)
 
 
 def _apply_standard_context_vat(fields: dict[str, Any], context: StandardOCRParserContext) -> None:
-    supply_amount = _context_amount(context, "supply_amount")
-    vat_amount = _context_amount(context, "vat_amount")
-    vat_review_hint = _context_has_vat_review_hint(context)
+    inline_text = sanitize_lines_for_parsing("\n".join(context.safe_text_lines))
+    for key, labels in (("supply_amount", SUPPLY_AMOUNT_KEYWORDS), ("vat_amount", VAT_KEYWORDS)):
+        explicit = _context_amount(context, key)
+        # Separate OCR blocks carry no row relationship in this context.
+        fields[key] = explicit if explicit is not None else _first_explicit_amount(
+            {}, (), inline_text, labels, allow_following_line=False,
+        )
+    fields.update(_explicit_vat_fields(fields.get("supply_amount"), fields.get("vat_amount")))
+    if fields.get("vat_amount") is None and _context_has_vat_review_hint(context):
+        fields["vat_warnings"].append("vat_review_hint")
 
-    if supply_amount is not None:
-        fields["supply_amount"] = supply_amount
-    if vat_amount is not None:
-        fields["vat_amount"] = vat_amount
-        fields["estimated_supply_amount"] = None
-        fields["estimated_vat_amount"] = None
-        fields["vat_source"] = "explicit"
-        fields["vat_note"] = "영수증에 부가세가 명시되어 있음"
-        fields["vat_review_required"] = bool(vat_review_hint)
-        fields["vat_warnings"] = _unique(list(fields.get("vat_warnings", [])) + (["vat_review_hint"] if vat_review_hint else []))
-        if supply_amount is not None and supply_amount > 0:
-            explicit_tax_total = supply_amount + vat_amount
-            amount_warnings = list(fields.get("amount_warnings", []))
-            for field_name in ("total_amount", "final_amount", "paid_amount"):
-                current_amount = fields.get(field_name)
-                if (
-                    current_amount is not None
-                    and current_amount != explicit_tax_total
-                    and abs(current_amount - explicit_tax_total) <= 1000
-                    and fields.get("discount_amount") in (None, 0)
-                ):
-                    fields[field_name] = explicit_tax_total
-                    amount_warnings.append(f"{field_name}_replaced_by_explicit_vat_total")
-            if fields.get("final_amount") == fields.get("paid_amount"):
-                amount_warnings = [
-                    warning for warning in amount_warnings if warning != "final_paid_amount_mismatch"
-                ]
-            fields["amount_warnings"] = _unique(amount_warnings)
-        return
 
-    total_amount = fields["total_amount"]
-    vat_warnings = list(fields.get("vat_warnings", []))
-    if vat_review_hint:
-        vat_warnings.append("vat_review_hint")
-        vat_warnings.append("vat_not_explicit")
-    if total_amount is not None and total_amount > 0:
-        if supply_amount is not None and 0 < supply_amount < total_amount:
-            supply_difference = total_amount - supply_amount
-            if abs(round(supply_amount / 10) - supply_difference) <= 2:
-                estimated_supply = supply_amount
-                estimated_vat = supply_difference
-                vat_warnings.append("vat_estimated_from_supply_difference")
-            else:
-                estimated_supply, estimated_vat = calculate_estimated_vat_amounts(total_amount)
-                fields["supply_amount"] = None
-                vat_warnings.append("supply_amount_inconsistent_with_total_ignored")
+def _clear_conflicting_context_fields(fields: dict[str, Any], context: StandardOCRParserContext) -> None:
+    tax_conflict = False
+    for key in ("merchant_name", "transaction_date", "business_number", "payment_method",
+                "total_amount", "final_amount", "paid_amount", "gross_amount", "discount_amount", "supply_amount", "vat_amount"):
+        values = context.candidate_map.get(key, [])
+        if key.endswith("amount"):
+            values = context.amount_candidate_map.get(key, values)
+            normalizer = normalize_discount_amount if key == "discount_amount" else normalize_amount
+            normalized = {normalizer(value) for value in values}
+        elif key == "transaction_date":
+            normalized = {normalize_date(value) for value in values}
+        elif key == "business_number":
+            normalized = {normalize_business_number(value) for value in values}
+        elif key == "merchant_name":
+            normalized = {re.sub(r"[\s()\[\]:]", "", value).lower() for value in values
+                          if _is_usable_merchant_candidate(value, explicit=True)
+                          and not _looks_like_context_merchant_noise(value)}
         else:
-            estimated_supply, estimated_vat = calculate_estimated_vat_amounts(total_amount)
-        fields["estimated_supply_amount"] = estimated_supply
-        fields["estimated_vat_amount"] = estimated_vat
-        fields["vat_source"] = "estimated_reference"
-        fields["vat_note"] = "부가세 미표기, 참고용 역산값"
-        vat_warnings.append("vat_estimated_reference_only")
-        fields["vat_review_required"] = True
-    elif total_amount == 0:
-        fields["estimated_supply_amount"] = None
-        fields["estimated_vat_amount"] = None
-        fields["vat_source"] = "zero_amount"
-        fields["vat_note"] = "총액 0원으로 부가세 참고 추정 생략"
-        vat_warnings.append("vat_estimate_skipped_zero_amount")
-        fields["vat_review_required"] = bool(vat_review_hint)
-    else:
-        fields["vat_review_required"] = True
-    fields["vat_amount"] = None
-    fields["vat_warnings"] = _unique(vat_warnings)
+            normalized = {re.sub(r"[\s()\[\]:]", "", value).lower() for value in values}
+        normalized.discard(None)
+        if len(normalized) > 1:
+            fields[key] = None
+            tax_conflict |= key in {"supply_amount", "vat_amount"}
+            fields.setdefault("parser_warnings", []).append(f"candidate_conflict:{key}")
+            if key == "total_amount":
+                fields["amount_source"] = None
+    if tax_conflict:
+        old_warnings = fields.get("vat_warnings", [])
+        fields.update(_explicit_vat_fields(fields.get("supply_amount"), fields.get("vat_amount")))
+        fields["vat_warnings"] = _unique(old_warnings + fields["vat_warnings"])
+
 
 
 def _standard_context_parser_warnings(
@@ -641,12 +561,8 @@ def _standard_context_parser_warnings(
 
 
 def _context_amount(context: StandardOCRParserContext, candidate_type: str, *, discount: bool = False) -> int | None:
-    value = _first_context_value(context.amount_candidate_map, candidate_type)
-    if value is None:
-        return None
-    if discount:
-        return normalize_discount_amount(value)
-    return normalize_amount(value)
+    normalizer = normalize_discount_amount if discount else normalize_amount
+    return normalizer(_first_context_value(context.amount_candidate_map, candidate_type, normalizer=normalizer))
 
 
 def _is_implausibly_large_paid_amount(paid_amount: int | None, expected_amount: int | None) -> bool:
@@ -657,11 +573,11 @@ def _is_implausibly_large_paid_amount(paid_amount: int | None, expected_amount: 
     return paid_amount > expected_amount * 20
 
 
-def _first_context_value(candidate_map: dict[str, list[str]], *candidate_types: str) -> str | None:
+def _first_context_value(candidate_map: dict[str, list[str]], *candidate_types: str, normalizer=None) -> str | None:
     for candidate_type in candidate_types:
         for value in candidate_map.get(candidate_type, []):
             text = str(value or "").strip()
-            if text:
+            if text and (normalizer is None or normalizer(text) is not None):
                 return text
     return None
 
@@ -803,38 +719,17 @@ def _extract_amount_fields(raw_text: str, raw_json: dict[str, Any]) -> dict[str,
         payment_target_amount=payment_target_amount,
         warnings=amount_warnings,
     )
-    explicit_zero_amount = final_amount == 0 or paid_amount == 0
     discount_amount = _sanitize_discount_amount_candidate(
         discount_amount=discount_amount,
         gross_amount=gross_amount,
-        final_amount=final_amount,
-        paid_amount=paid_amount,
         warnings=amount_warnings,
     )
     if discount_amount is not None and discount_amount > 0:
         amount_warnings.append("discount_detected")
-    if (
-        gross_amount is not None
-        and gross_amount > 0
-        and not discount_amount
-        and (paid_amount == 0 or (final_amount == 0 and not _has_unclassified_negative_amount(amount_lines)))
-    ):
-        discount_amount = gross_amount
-        amount_warnings.append("discount_inferred_from_zero_payment")
-
-    gross_minus_discount = None
-    if gross_amount is not None and discount_amount is not None:
-        gross_minus_discount = max(gross_amount - discount_amount, 0)
-        if final_amount is None:
-            final_amount = gross_minus_discount
-            if not explicit_zero_amount:
-                amount_warnings.append("gross_total_not_used_due_to_discount")
-
     total_amount, amount_source = _choose_total_amount(
         paid_amount=paid_amount,
         payment_target_amount=payment_target_amount,
         final_amount=final_amount,
-        gross_minus_discount=gross_minus_discount,
         gross_amount=gross_amount,
     )
     if total_amount is None:
@@ -863,8 +758,6 @@ def _sanitize_discount_amount_candidate(
     *,
     discount_amount: int | None,
     gross_amount: int | None,
-    final_amount: int | None,
-    paid_amount: int | None,
     warnings: list[str],
 ) -> int | None:
     if discount_amount is None:
@@ -873,12 +766,8 @@ def _sanitize_discount_amount_candidate(
         warnings.append("discount_quantity_candidate_ignored")
         return None
     if gross_amount is not None and gross_amount > 0 and discount_amount > gross_amount:
-        recalculated = _discount_from_amount_difference(gross_amount, final_amount, paid_amount)
         warnings.append("discount_amount_suspicious")
         warnings.append("discount_identifier_candidate_ignored")
-        if recalculated is not None:
-            warnings.append("discount_recalculated_from_gross_and_final")
-            return recalculated
         return None
     return discount_amount
 
@@ -915,74 +804,26 @@ def _sanitize_paid_amount_candidate(
     return paid_amount
 
 
-def _discount_from_amount_difference(
-    gross_amount: int,
-    final_amount: int | None,
-    paid_amount: int | None,
-) -> int | None:
-    for basis in (final_amount, paid_amount):
-        if basis is None:
-            continue
-        difference = gross_amount - basis
-        if 0 < difference <= gross_amount:
-            return difference
-    return None
 
 
 def _extract_vat_fields(raw_text: str, raw_json: dict[str, Any], total_amount: int | None) -> dict[str, Any]:
-    supply_amount = _first_explicit_amount(raw_json, ("supply_amount",), raw_text, SUPPLY_AMOUNT_KEYWORDS)
-    vat_amount = _first_explicit_amount(raw_json, ("vat_amount",), raw_text, VAT_KEYWORDS)
+    supply = _first_explicit_amount(raw_json, ("supply_amount",), raw_text, SUPPLY_AMOUNT_KEYWORDS)
+    vat = _first_explicit_amount(raw_json, ("vat_amount",), raw_text, VAT_KEYWORDS)
+    return _explicit_vat_fields(supply, vat)
 
-    if vat_amount is not None:
-        return {
-            "supply_amount": supply_amount,
-            "vat_amount": vat_amount,
-            "estimated_supply_amount": None,
-            "estimated_vat_amount": None,
-            "vat_source": "explicit",
-            "vat_note": "영수증에 부가세가 명시되어 있음",
-            "vat_warnings": [],
-            "vat_review_required": False,
-        }
 
-    warnings = ["vat_not_explicit"]
-    if total_amount is not None and total_amount > 0:
-        estimated_supply, estimated_vat = calculate_estimated_vat_amounts(total_amount)
-        warnings.append("vat_estimated_reference_only")
-        return {
-            "supply_amount": supply_amount,
-            "vat_amount": None,
-            "estimated_supply_amount": estimated_supply,
-            "estimated_vat_amount": estimated_vat,
-            "vat_source": "estimated_reference",
-            "vat_note": "부가세 미표기, 참고용 역산값",
-            "vat_warnings": warnings,
-            "vat_review_required": True,
-        }
-
-    if total_amount == 0:
-        warnings.append("vat_estimate_skipped_zero_amount")
-        return {
-            "supply_amount": supply_amount,
-            "vat_amount": None,
-            "estimated_supply_amount": None,
-            "estimated_vat_amount": None,
-            "vat_source": "zero_amount",
-            "vat_note": "결제금액 0원으로 참고 추정값 미계산",
-            "vat_warnings": warnings,
-            "vat_review_required": False,
-        }
-
+def _explicit_vat_fields(supply: int | None, vat: int | None) -> dict[str, Any]:
     return {
-        "supply_amount": supply_amount,
-        "vat_amount": None,
+        "supply_amount": supply,
+        "vat_amount": vat,
         "estimated_supply_amount": None,
         "estimated_vat_amount": None,
-        "vat_source": "missing",
-        "vat_note": "부가세 미표기, 금액 확인 필요",
-        "vat_warnings": warnings,
-        "vat_review_required": True,
+        "vat_source": "explicit" if vat is not None else "missing",
+        "vat_note": None,
+        "vat_warnings": [] if vat is not None else ["vat_not_explicit"],
+        "vat_review_required": vat is None,
     }
+
 
 
 def _first_explicit_amount(
@@ -990,8 +831,28 @@ def _first_explicit_amount(
     json_keys: tuple[str, ...],
     raw_text: str,
     text_keywords: tuple[str, ...],
+    *,
+    allow_following_line: bool = True,
 ) -> int | None:
-    return _first_amount(raw_json, json_keys, raw_text, text_keywords)
+    for key in json_keys:
+        amount = normalize_amount(raw_json.get(key))
+        if amount is not None:
+            return amount
+    lines = raw_text.splitlines()
+    for index, line in enumerate(lines):
+        if is_receipt_instruction(line):
+            continue
+        for keyword in sorted(text_keywords, key=len, reverse=True):
+            label = r"\s*".join(re.escape(char) for char in keyword)
+            match = re.match(rf"^\s*[\[*]*\s*{label}\s*[\]:：]*\s*(.*?)\s*$", line, re.IGNORECASE)
+            if not match:
+                continue
+            value = match.group(1) or (
+                lines[index + 1].strip() if allow_following_line and index + 1 < len(lines) else ""
+            )
+            if re.fullmatch(OCR_AMOUNT_PATTERN, value):
+                return normalize_amount(_normalize_ocr_amount_token(value))
+    return None
 
 
 def _first_amount(
@@ -1192,12 +1053,13 @@ def _extract_discount_amount(source_lines: list[dict[str, Any]], raw_json: dict[
     summary_amounts: list[int] = []
     item_amounts: list[int] = []
     warnings: list[str] = []
-    lines = [str(item.get("line") or "") for item in source_lines]
+    lines = [str(item.get("line") or "") for item in source_lines
+             if not re.match(r"\s*(?:포인트\s*사용|사용\s*포인트|적립|누적|잔여)", str(item.get("line") or ""))]
     has_discount_table_header = _has_discount_table_header(lines)
     if has_discount_table_header:
         warnings.append("discount_table_header_detected")
     seen_summary_amounts: set[int] = set()
-    for key in ("discount_amount", "discount", "coupon_amount", "point_used_amount"):
+    for key in ("discount_amount", "discount", "coupon_amount"):
         amount = normalize_discount_amount(raw_json.get(key))
         if amount is not None:
             summary_amounts.append(amount)
@@ -1318,18 +1180,6 @@ def _has_parenthesized_discount_label(line: str) -> bool:
     return bool(re.search(r"[\(\[]\s*할\s*인\s*금\s*액\s*[\)\]]", line or ""))
 
 
-def _has_unclassified_negative_amount(lines: list[str]) -> bool:
-    for line in lines:
-        amount = normalize_amount(_extract_line_amount(line))
-        if amount is None or amount >= 0:
-            continue
-        label_type = classify_discount_label(line)["line_type"]
-        if label_type in {"discount_summary", "discount_target"}:
-            continue
-        if any(keyword in line for keyword in DISCOUNT_LINE_HINT_KEYWORDS):
-            continue
-        return True
-    return False
 
 
 def _extract_labeled_line_amount(lines: list[str], index: int) -> tuple[int | None, bool]:
@@ -1585,7 +1435,6 @@ def _choose_total_amount(
     paid_amount: int | None,
     payment_target_amount: int | None,
     final_amount: int | None,
-    gross_minus_discount: int | None,
     gross_amount: int | None,
 ) -> tuple[int | None, str]:
     if paid_amount is not None:
@@ -1594,8 +1443,6 @@ def _choose_total_amount(
         return payment_target_amount, "payment_target_amount"
     if final_amount is not None:
         return final_amount, "final_amount"
-    if gross_minus_discount is not None:
-        return gross_minus_discount, "gross_minus_discount"
     if gross_amount is not None:
         return gross_amount, "line_item_total"
     return None, "unknown"
@@ -1640,56 +1487,18 @@ def _extract_merchant_name(
 ) -> tuple[str | None, list[str]]:
     merchant_from_json = _merchant_from_json(raw_json)
     if _is_usable_merchant_candidate(merchant_from_json):
-        return find_merchant_by_name_fragment(merchant_from_json) or normalize_merchant_name(merchant_from_json), []
-
-    merchant_from_business_number = find_merchant_by_business_number(business_number)
-    if merchant_from_business_number:
-        return merchant_from_business_number, []
+        return normalize_merchant_name(merchant_from_json), []
 
     merchant_from_labeled_text = _merchant_from_labeled_text(raw_text)
     if _is_usable_merchant_candidate(merchant_from_labeled_text):
-        return find_merchant_by_name_fragment(merchant_from_labeled_text) or normalize_merchant_name(merchant_from_labeled_text), []
+        return normalize_merchant_name(merchant_from_labeled_text), []
 
     merchant_from_context, context_warning = _merchant_from_receipt_context(raw_text)
     if _is_usable_merchant_candidate(merchant_from_context):
         warnings = [context_warning] if context_warning else []
-        return find_merchant_by_name_fragment(merchant_from_context) or normalize_merchant_name(merchant_from_context), warnings
+        return normalize_merchant_name(merchant_from_context), warnings
 
     return None, []
-
-
-def _should_prefer_business_number_merchant(
-    current_merchant: str | None,
-    business_number_merchant: str | None,
-) -> bool:
-    if not business_number_merchant:
-        return False
-    if not current_merchant:
-        return True
-    current_compact = re.sub(r"[^0-9A-Za-z가-힣]", "", current_merchant).lower()
-    dictionary_compact = re.sub(r"[^0-9A-Za-z가-힣]", "", business_number_merchant).lower()
-    if not current_compact:
-        return True
-    if not re.search(r"[가-힣]", current_merchant):
-        return True
-    if _looks_like_weak_merchant_candidate(current_merchant, business_number_merchant):
-        return True
-    return current_compact in dictionary_compact or dictionary_compact in current_compact
-
-
-def _looks_like_weak_merchant_candidate(current_merchant: str, business_number_merchant: str) -> bool:
-    current_compact = re.sub(r"[^0-9A-Za-z가-힣]", "", current_merchant).lower()
-    dictionary_compact = re.sub(r"[^0-9A-Za-z가-힣]", "", business_number_merchant).lower()
-    if not current_compact or len(dictionary_compact) <= len(current_compact):
-        return False
-    if re.search(r"\d", current_compact):
-        return True
-    if len(current_compact) <= 4:
-        return True
-    if "시장" in current_compact and "시설관리공단" in dictionary_compact:
-        return True
-    weak_suffixes = ("점", "지점")
-    return any(current_compact.endswith(suffix) for suffix in weak_suffixes) and len(current_compact) <= 5
 
 
 def _merchant_from_json(raw_json: dict[str, Any]) -> str | None:
@@ -1752,7 +1561,6 @@ def _merchant_from_receipt_context(raw_text: str) -> tuple[str | None, str | Non
                 continue
             if _has_business_keyword(candidate):
                 return candidate, None
-            return candidate, "merchant_name_low_confidence"
 
     for line in clean_lines[:8]:
         if not _is_usable_merchant_candidate(line):
@@ -1770,17 +1578,17 @@ def _merchant_from_labeled_line(line: str) -> str | None:
     return normalize_merchant_name(match.group(1))
 
 
-def _is_usable_merchant_candidate(value: str | None) -> bool:
+def _is_usable_merchant_candidate(value: str | None, *, explicit: bool = False) -> bool:
     candidate = normalize_merchant_name(value)
-    if not candidate:
+    if not candidate or "[REDACTED]" in candidate or is_receipt_instruction(candidate):
         return False
     if detect_sensitive_text(candidate).detected:
         return False
     if is_overlay_text(candidate):
         return False
-    if is_product_line_text(candidate):
+    if not explicit and is_product_line_text(candidate):
         return False
-    if is_receipt_metadata_line(candidate):
+    if not explicit and is_receipt_metadata_line(candidate):
         return False
     compact = re.sub(r"\s+", "", candidate)
     if len(compact) < 2:
@@ -1788,6 +1596,53 @@ def _is_usable_merchant_candidate(value: str | None) -> bool:
     if compact.startswith(("대표", "대표자", "주소", "TEL", "Tel", "tel", "전화")):
         return False
     return True
+
+
+def _looks_like_context_merchant_noise(value: str | None) -> bool:
+    candidate = normalize_merchant_name(value)
+    if not candidate:
+        return True
+    compact = re.sub(r"[^0-9A-Za-z\uac00-\ud7a3]", "", candidate).lower()
+    if not compact:
+        return True
+    if _has_context_merchant_marker(candidate):
+        return False
+    blocked_tokens = (
+        "\ubc88\ud638",
+        "\uc785\ub825\ubc88\ud638",
+        "\uc2b9\uc778",
+        "\uc804\ud654",
+        "\uc8fc\uc18c",
+        "\uae08\uc561",
+        "\ud569\uacc4",
+        "\ub300\ud45c",
+        "\ub300\ud45c\uc790",
+        "\uc131\uba85",
+    )
+    if any(token in compact for token in blocked_tokens):
+        return True
+    return False
+
+
+def _has_context_merchant_marker(value: str | None) -> bool:
+    candidate = normalize_merchant_name(value)
+    if not candidate:
+        return False
+    compact = re.sub(r"[^0-9A-Za-z\uac00-\ud7a3]", "", candidate).lower()
+    markers = (
+        "\uc0c1\uc810",
+        "\uc810",
+        "\uc8fc\uc720\uc18c",
+        "\ud734\uac8c\uc18c",
+        "\uc2dd\ub2f9",
+        "\uc57d\uad6d",
+        "\uc740\ud589",
+        "\uc0bc\uacc4\ud0d5",
+        "\uce74\uce20",
+        "\ud55c\uc6b0",
+        "fresh",
+    )
+    return any(marker in compact for marker in markers) or compact.endswith("\uc810")
 
 
 def is_valid_merchant_candidate(value: str | None) -> bool:
@@ -1800,6 +1655,20 @@ def _has_business_keyword(value: str) -> bool:
 
 
 def _extract_payment_method(raw_text: str) -> str | None:
+    lines = raw_text.splitlines()
+    payment_labels = {keyword for keyword, _ in PAYMENT_METHOD_KEYWORDS}
+    evidence = []
+    for index, line in enumerate(lines):
+        if is_receipt_instruction(line):
+            continue
+        # OCR may separate a bare card label from the adjacent statutory notice.
+        if re.sub(r"[\W_]", "", line) in payment_labels and any(
+            is_receipt_instruction(lines[neighbor])
+            for neighbor in (index - 1, index + 1) if 0 <= neighbor < len(lines)
+        ):
+            continue
+        evidence.append(line)
+    raw_text = "\n".join(evidence)
     for keyword, value in PAYMENT_METHOD_KEYWORDS:
         if keyword in raw_text:
             return value

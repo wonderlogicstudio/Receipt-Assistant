@@ -1,0 +1,45 @@
+{
+  "description": "Receipt Assistant project-only Ponytail principles and preflight; no automatic code changes or OCR.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node -e \"require(require('path').join(require('child_process').execFileSync('git',['rev-parse','--show-toplevel'],{encoding:'utf8'}).trim(),'scripts/ponytail_hook.js'))\" SessionStart",
+            "timeout": 5,
+            "additionalContextLimit": 2000,
+            "statusMessage": "Loading project Ponytail preflight"
+          }
+        ],
+        "matcher": "startup|resume|clear|compact|fork"
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node -e \"require(require('path').join(require('child_process').execFileSync('git',['rev-parse','--show-toplevel'],{encoding:'utf8'}).trim(),'scripts/ponytail_hook.js'))\" UserPromptSubmit",
+            "timeout": 5,
+            "additionalContextLimit": 2000,
+            "statusMessage": "Loading project Ponytail preflight"
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node -e \"require(require('path').join(require('child_process').execFileSync('git',['rev-parse','--show-toplevel'],{encoding:'utf8'}).trim(),'scripts/ponytail_hook.js'))\" SubagentStart",
+            "timeout": 5,
+            "additionalContextLimit": 2000,
+            "statusMessage": "Loading project Ponytail preflight"
+          }
+        ]
+      }
+    ]
+  }
+}

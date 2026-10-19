@@ -293,8 +293,8 @@ def test_summary_sheet_includes_estimated_vat_columns_with_reference_style():
 
     assert "추정공급가액" in headers(summary)
     assert "추정부가세" in headers(summary)
-    assert summary["N2"].value == 4636
-    assert summary["O2"].value == 464
+    assert summary["N2"].value is None
+    assert summary["O2"].value is None
     assert summary["P2"].value == "estimated_reference"
     assert "vat_estimated_reference_only" in summary["Q2"].value
     assert summary["N2"].number_format == "#,##0"
@@ -478,6 +478,19 @@ def test_unmatched_or_candidate_records_are_visible_in_review_or_card_sheet():
 
     assert workbook["04_검토필요"]["H2"].value == CardMatchStatus.CANDIDATE.value
     assert workbook["05_카드대조"]["J2"].value == CardMatchStatus.CANDIDATE.value
+
+
+def test_merchant_branch_separator_is_preserved_while_paths_stay_hidden():
+    record = replace(make_receipt(), merchant_name="새빛정원 / 바다지점")
+    workbook = ExcelExporter().build_workbook([record])
+    sheet = workbook.worksheets[0]
+    headers = [cell.value for cell in sheet[1]]
+    assert sheet.cell(2, headers.index("상호") + 1).value == record.merchant_name
+    exporter = ExcelExporter()
+    assert exporter._safe_text("Garden/Harbor Branch") == "Garden/Harbor Branch"
+    for path in ("C:/private/receipt.jpg", "/home/private/receipt.jpg", "data/uploads/local/receipt.jpg",
+                 "source: /opt/private/receipt.jpg"):
+        assert exporter._safe_text(path) == "receipt.jpg"
 
 
 def test_full_local_paths_are_not_written_to_any_sheet():

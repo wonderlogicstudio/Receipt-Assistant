@@ -1,0 +1,8 @@
+# Optional Windows / Python 3.11 preview. Install GPU wheel from the official cu118 index first.
+-r requirements.txt
+streamlit==1.60.0
+numpy==1.26.4
+protobuf==3.20.2
+paddleocr==3.3.0
+paddlex[ocr-core]==3.3.13
+paddlepaddle-gpu==3.2.2

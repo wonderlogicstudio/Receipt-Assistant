@@ -93,7 +93,7 @@ def main() -> int:
         "results": results,
     }
     output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
-    print(f"Saved safe quality run: {output_path}")
+    print("Saved quality report.")
     return 0
 
 

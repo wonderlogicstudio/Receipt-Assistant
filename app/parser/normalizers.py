@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 import re
 from datetime import date, datetime
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal, InvalidOperation
 
 import pandas as pd
 
@@ -17,11 +17,24 @@ def normalize_date(value: object) -> date | None:
         return value.date()
 
     if isinstance(value, (int, float)) and not isinstance(value, bool):
-        if isinstance(value, float) and math.isnan(value):
+        if isinstance(value, float) and not math.isfinite(value):
             return None
         text = str(int(value))
     else:
         text = str(value).strip()
+
+    korean_match = re.search(r"((?:19|20)\d{2})\s*\ub144\s*(\d{1,2})\s*[\uc6d4\uc6d0]\s*(\d{1,2})\s*\uc77c", text)
+    if korean_match:
+        try:
+            return _valid_date_or_none(
+                date(
+                    int(korean_match.group(1)),
+                    int(korean_match.group(2)),
+                    int(korean_match.group(3)),
+                )
+            )
+        except ValueError:
+            return None
 
     text = text.split()[0]
     if re.fullmatch(r"\d{8}", text):
@@ -57,7 +70,7 @@ def normalize_amount(value: object) -> int | None:
     if isinstance(value, int):
         return value
     if isinstance(value, float):
-        if math.isnan(value):
+        if not math.isfinite(value) or not value.is_integer():
             return None
         return int(value)
 
@@ -69,14 +82,20 @@ def normalize_amount(value: object) -> int | None:
     text = re.sub(r"(?<=\d)[,.]\s*(?=\d{3}(?:\D|$))", "", text)
     text = text.replace(",", "")
     text = re.sub(r"[원₩\s]", "", text)
-    text = re.sub(r"[^0-9.-]", "", text)
+    if is_parenthesized_negative:
+        text = text.strip("()")
+    if re.search(r"[^0-9.eE+\-]", text):
+        return None
     if is_parenthesized_negative and text and not text.startswith("-"):
         text = f"-{text}"
     if text in {"", "-", ".", "-."}:
         return None
     try:
-        return int(float(text))
-    except ValueError:
+        amount = Decimal(text)
+        if not amount.is_finite() or not math.isfinite(float(amount)) or amount != amount.to_integral_value():
+            return None
+        return int(amount)
+    except (InvalidOperation, ValueError, OverflowError):
         return None
 
 
@@ -87,12 +106,6 @@ def normalize_discount_amount(value: object) -> int | None:
     return abs(amount)
 
 
-def calculate_estimated_vat_amounts(total_amount: int | None) -> tuple[int | None, int | None]:
-    if total_amount is None or total_amount <= 0:
-        return None, None
-    estimated_vat = int((Decimal(total_amount) / Decimal(11)).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
-    estimated_supply = total_amount - estimated_vat
-    return estimated_supply, estimated_vat
 
 
 def normalize_column_name(value: object) -> str:
@@ -176,10 +189,8 @@ def is_overlay_text(value: object) -> bool:
         "easycheck",
         "ceasyheck",
         "easyheck",
-        "슈퍼마리오",
     }
     overlay_compact_keywords = {_compact_token(keyword) for keyword in overlay_keywords if keyword}
-    overlay_compact_keywords.update({"슈퍼마리오", "supermario"})
     if normalized in overlay_keywords or compact in overlay_compact_keywords:
         return True
     if re.fullmatch(r"(?:kt|skt|u\+|lgu\+|lte|5g|wifi|wi-fi|hd)?\s*\d{1,2}:\d{2}", text, flags=re.IGNORECASE):
@@ -195,17 +206,6 @@ def is_product_line_text(value: object) -> bool:
     text = normalize_merchant_name(value)
     if not text:
         return True
-    product_phrases = (
-        "레고스토어",
-        "미미 인어공주미미",
-        "트랜스포머 클래식",
-        "AI 로봇 강아지 마일",
-        "어린이날 행사",
-    )
-    normalized = re.sub(r"\s+", "", text.lower())
-    for phrase in product_phrases:
-        if re.sub(r"\s+", "", phrase.lower()) in normalized:
-            return True
     product_keywords = ("행사", "할인", "증정", "포인트", "상품", "품목", "수량", "단가")
     return any(keyword in text for keyword in product_keywords)
 
@@ -254,7 +254,7 @@ def is_receipt_metadata_line(value: object) -> bool:
         return True
     if re.search(r"\d{2,4}-\d{3,4}-\d{4}", text):
         return True
-    if re.search(r"(?:₩\s*)?(?:\d{1,3}(?:,\d{3})+|\d+)(?:원)?", text) and any(char.isdigit() for char in text):
+    if re.search(r"(?<![0-9A-Za-z가-힣])(?:₩\s*)?(?:\d{1,3}(?:,\d{3})+|\d+)(?:원)?(?![0-9A-Za-z가-힣])", text):
         return True
     return False
 

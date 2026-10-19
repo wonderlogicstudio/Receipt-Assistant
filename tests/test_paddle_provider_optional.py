@@ -206,13 +206,13 @@ def test_fake_paddleocr_success_returns_standard_result(tmp_path) -> None:
     assert_no_forbidden_output(result)
 
 
-def test_orientation_fallback_is_limited_to_results_without_core_candidates() -> None:
+def test_orientation_fallback_requires_identity_and_amount_evidence() -> None:
     assert paddle_provider_module._should_try_orientation_fallback({"key_value_candidates": []})
     assert paddle_provider_module._should_try_orientation_fallback({"key_value_candidates": [{"candidate_type": "approval_number"}]})
-    assert not paddle_provider_module._should_try_orientation_fallback(
+    assert paddle_provider_module._should_try_orientation_fallback(
         {"key_value_candidates": [{"candidate_type": "transaction_date"}]}
     )
-    assert not paddle_provider_module._should_try_orientation_fallback(
+    assert paddle_provider_module._should_try_orientation_fallback(
         {"key_value_candidates": [{"candidate_type": "total_amount"}]}
     )
 

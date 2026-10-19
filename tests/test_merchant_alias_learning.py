@@ -8,7 +8,6 @@ from app.classifier.merchant_alias_learning import MerchantAliasLearningService,
 from app.core.enums import CardMatchStatus, EvidenceType, ReviewStatus
 from app.core.receipt_models import ReceiptRecord
 from app.db.merchant_repository import MerchantMasterInput, MerchantRepository
-from app.ui.streamlit_app import learn_merchant_aliases_from_review
 
 
 def make_receipt(
@@ -136,25 +135,30 @@ def test_uncertain_master_link_saves_alias_without_master_id(tmp_path):
     assert rows[0]["merchant_master_id"] is None
 
 
-def test_alias_learning_failure_does_not_escape_review_save_wrapper():
-    class FailingService:
-        def learn_from_review(self, *, original_records, reviewed_records):
-            raise RuntimeError("raw traceback should not escape")
+def test_excel_generation_does_not_learn_merchant_aliases(monkeypatch):
+    from streamlit.testing.v1 import AppTest
+    from app.ui import streamlit_app
+    from app.classifier.merchant_alias_learning import MerchantAliasLearningResult
 
-    receipt = make_receipt(merchant_name="안전상호")
+    calls = []
+    monkeypatch.setattr(MerchantAliasLearningService, "learn_from_review", lambda *a, **kw: calls.append(kw) or MerchantAliasLearningResult(saved_count=1))
+    monkeypatch.setattr(streamlit_app, "MerchantRepository", lambda **kw: object(), raising=False)
+    monkeypatch.setattr(streamlit_app, "render_runtime_ocr_provider_selector", lambda _: "mock")
+    monkeypatch.setattr(streamlit_app, "render_runtime_paddle_gpu_option", lambda _: (False, False))
+    monkeypatch.setattr(streamlit_app, "render_review_view", lambda records, **kw: records)
+    monkeypatch.setattr(streamlit_app, "save_export_history_once", lambda **kw: {})
 
-    result = learn_merchant_aliases_from_review(
-        original_records=[receipt],
-        reviewed_records=[receipt],
-        service=FailingService(),
-    )
+    def page():
+        from app.ui.streamlit_app import render_new_job_view
+        render_new_job_view()
 
-    assert result == {
-        "saved_count": 0,
-        "skipped_count": 0,
-        "failed_count": 1,
-        "failed": True,
-    }
+    app = AppTest.from_function(page)
+    app.session_state["receipt_records"] = [make_receipt(merchant_name="안전상호")]
+    app.run()
+    next(button for button in app.button if button.label == "표준 엑셀 생성").click().run()
+    assert not app.exception
+    assert app.session_state["export_file_bytes"].startswith(b"PK")
+    assert calls == []
 
 
 def test_alias_db_does_not_store_raw_paths_or_sensitive_context(tmp_path):
