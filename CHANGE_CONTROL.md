@@ -1,5 +1,36 @@
 # 변경 관리 규칙
 
+## CC-2026-10-18: 통일 양식·상호 보정·누적 저장 설계
+
+요청: 세무사 전달에 유용한 양식을 포인트 사용·할인·복합결제까지 구분해 정리하고, 상호 보정 및 날짜별 누적 저장 방향을 문서화한다.
+
+상태: 설계 문서 작성. 구현·DB migration·출력 계약 변경은 미수행.
+
+산출물:
+
+- [통일 양식 변경안](docs/receipt_standardization_proposal.md)
+- [상호 보정 정리안](docs/merchant_resolution_design.md)
+- [누적 저장 설계안](docs/receipt_accumulation_design.md)
+
+현행과 충돌하는 의미는 차기 계약에서 분리한다. 기존 `total_amount`를 새 거래합계로 일괄 매핑하지 않고, 특정 거래처 자동 치환을 새 후보 정책과 혼동하지 않는다. 현재 원본/출력 보관 설정과 수동 dry-run 동작도 이번 문서로 바뀌지 않는다.
+
+후속 구현은 계약/fixture → Provider와 분리된 Parser/모델 매핑 → 저장/revision → 검수 UI → Exporter 순서의 작은 작업으로 나눈다. 상호 규칙 정리와 누적 저장은 각각 별도 단위로 진행한다. 전환별 compileall·기본 pytest와 관련 회귀, schema/parser/validator 버전 영향 점검을 수행한다.
+
+현행 코드·미커밋 수정·기존 DB/파일·8개 시트는 보존한다. 실제 고객 파일 재처리, 기존 이력 값 재해석, 과거 엑셀 재생성, 데이터 삭제, 모바일 앱 구현, 인증/결제, 클라우드 배포는 이번 작업에 포함하지 않는다.
+
+문서 정리 검증(2026-10-18):
+
+- 문서 11개의 상대 파일 링크 35개, 공백·코드 블록 형식 점검: 통과.
+- 변경 문서 `git diff --check`: 통과.
+- `python -m compileall -q app tests`: 통과. Python 소스 123개의 메모리 내 구문 컴파일도 오류 없음.
+- `python -m pytest`: 현재 실행 Python에 pytest가 없어 실행하지 못함. 테스트 통과로 기록하지 않는다. 의존성 설치·실제 OCR 호출은 수행하지 않았다.
+
+커밋 전 검증(2026-10-19):
+
+- 프로젝트 기준에 맞는 Python 3.13 격리 환경을 준비하고 `requirements.txt` 의존성만 설치했다. PaddleOCR·CUDA·실제 OCR 호출은 추가하지 않았다.
+- 기준 커밋 `e400fdb`와 문서 11개만 담은 격리 사본에서 `python -m compileall -q app tests` 통과, `python -m pytest -q -p no:cacheprovider`는 761 passed, 2 skipped였다.
+- 이 결과는 커밋 대상 트리 검증이며 로컬의 미커밋 OCR/Parser/테스트 수정까지 검증한 결과는 아니다. 해당 수정과 로컬 데이터는 문서 커밋에서 제외한다.
+
 ## Week 9-A PaddleOCR Provider PoC Change Control
 
 - Adding `PaddleOCRProvider` is a Provider expansion change.

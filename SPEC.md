@@ -1,5 +1,15 @@
 # 기능 명세
 
+## 2026-10-18 차기 데이터 계약 제안 — 미구현
+
+[통일 양식 변경안](docs/receipt_standardization_proposal.md)은 현재 명세를 즉시 대체하지 않는 별도 설계다. 연락처·정식 사업장 주소·거래시각은 현재 `ReceiptRecord`에 없으며 신규 필드로 제안한다. 거래합계, 당일 금전결제액, 포인트 할인/결제/역할미확인, 상품권, 명시 공급가액·부가세를 분리한다.
+
+현재 `total_amount`는 새 거래합계와 의미가 같다고 가정할 수 없다. 기존 값의 자동 재해석·과거 엑셀 변경은 하지 않는다. 기존 세액 참고 추정값은 명시값으로 바꾸거나 명시값 합계에 포함하지 않는다.
+
+[상호 보정](docs/merchant_resolution_design.md)은 추출값/DB 후보/사용자 선택값과 출처를 분리하는 방향이다. [날짜별 누적 저장](docs/receipt_accumulation_design.md)은 스캔 후 미검수 저장, revision, 재전송 중복 방지와 거래 관계를 제안한다. 현재의 엑셀 생성 시 이력 저장과 모바일 동기화 미구현 상태는 유지한다.
+
+이번 작업에서 `StandardOCRResult`·`ReceiptRecord`·DB·ExcelExporter 또는 schema/parser/validator 버전은 변경하지 않았다. 실제 전환 시 이 명세와 CHECKLIST 및 관련 fixture를 함께 갱신한다. 전체 내부 OCR 객체를 동기화/영구저장 형식으로 사용하지 않는다.
+
 ## 1. 핵심 흐름
 
 ```text
